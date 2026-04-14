@@ -1502,6 +1502,7 @@ tr:hover {
 .profile-actions {
   display: flex;
   gap: 8px;
+  justify-content: space-between;
 }
 
 /* VERSION FILTERS */
