@@ -118,7 +118,7 @@ html, body {
   color: var(--text-primary);
   overflow: hidden;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
@@ -130,7 +130,7 @@ body {
 
 #root {
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
@@ -698,6 +698,7 @@ input[type="radio"] {
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
   padding: var(--spacing-lg);
+  height: auto;
   overflow: visible;
 }
 
@@ -846,7 +847,7 @@ input[type="radio"] {
 }
 
 .progress-fill {
-  height: 100%;
+  min-height: 100vh;
   background: linear-gradient(90deg, var(--accent), var(--accent-light));
   border-radius: var(--radius-sm);
   transition: width var(--transition-normal);
@@ -956,7 +957,7 @@ tr:hover {
 .mr-auto { margin-right: auto; }
 
 .w-full { width: 100%; }
-.h-full { height: 100%; }
+.h-full { min-height: 100vh; }
 
 .text-center { text-align: center; }
 .text-right { text-align: right; }
@@ -1145,7 +1146,7 @@ tr:hover {
 
 /* PROGRESS */
 .progress-bar-fill {
-  height: 100%;
+  min-height: 100vh;
   background: linear-gradient(90deg, var(--accent), var(--accent-light));
   border-radius: var(--radius-sm);
   transition: width var(--transition-normal);
@@ -1292,7 +1293,7 @@ tr:hover {
 
 .skin-preview-canvas {
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
 }
 
 .skin-preview-controls {
@@ -1944,7 +1945,7 @@ input, textarea, select,
 }
 
 .stat-bar-fill {
-  height: 100%;
+  min-height: 100vh;
   background: linear-gradient(90deg, var(--accent), var(--accent-light));
   transition: width var(--transition-normal);
 }
@@ -2039,8 +2040,7 @@ html, body, #root {
 }
 
 html {
-  overflow-y: auto;
-  overflow-x: hidden;
+  min-height: 100vh;
 }
 
 body {
@@ -2053,7 +2053,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  overflow-x: hidden;
+  overflow: auto;
 }
 
 code, pre {
@@ -2070,7 +2070,7 @@ code, pre {
   top: 0;
   left: 0;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   z-index: -2;
   background: linear-gradient(135deg, var(--bg-primary) 0%, mix(var(--bg-primary), var(--accent), 5%) 50%, var(--bg-primary) 100%);
   overflow: hidden;
@@ -2097,7 +2097,7 @@ code, pre {
   top: 0;
   left: 0;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.02'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
   opacity: 0.3;
   animation: drift 30s linear infinite;
@@ -2122,7 +2122,7 @@ code, pre {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   position: relative;
   z-index: 1;
 }
@@ -2396,8 +2396,9 @@ body.theme-light .header {
   flex: 1;
   position: relative;
   z-index: 10;
-  height: auto;
-  overflow: visible;
+  min-height: calc(100vh - 172px);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 
@@ -3034,7 +3035,7 @@ body.theme-light .modal-content {
 }
 
 .progress-fill {
-  height: 100%;
+  min-height: 100vh;
   background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%);
   border-radius: 3px;
   transition: width 0.3s ease;
@@ -3329,7 +3330,7 @@ body.theme-light .modal-content {
 }
 
 .stat-bar-fill {
-  height: 100%;
+  min-height: 100vh;
   background: var(--accent);
   border-radius: 2px;
   transition: width 0.3s ease;
@@ -3642,7 +3643,7 @@ body.theme-light .modal-content {
 }
 
 .progress-bar-fill {
-  height: 100%;
+  min-height: 100vh;
   background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%);
   border-radius: 2px;
   transition: width 0.3s ease;
@@ -3771,7 +3772,7 @@ body[data-accent="white"] {
 
 html, body, #root {
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   overflow: hidden;
 }
 
@@ -3793,7 +3794,7 @@ body {
   top: 0;
   left: 0;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   z-index: -2;
   background: linear-gradient(135deg, var(--bg-primary) 0%, mix(var(--bg-primary), var(--accent), 5%) 50%, var(--bg-primary) 100%);
   overflow: hidden;
@@ -3820,7 +3821,7 @@ body {
   top: 0;
   left: 0;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.02'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
   opacity: 0.3;
   animation: drift 30s linear infinite;
@@ -3845,7 +3846,7 @@ body {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   position: relative;
   z-index: 1;
 }
@@ -4612,7 +4613,7 @@ body.theme-light .modal-content {
 }
 
 .progress-fill {
-  height: 100%;
+  min-height: 100vh;
   background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%);
   border-radius: 3px;
   transition: width 0.3s ease;
@@ -4905,7 +4906,7 @@ body.theme-light .modal-content {
 }
 
 .stat-bar-fill {
-  height: 100%;
+  min-height: 100vh;
   background: var(--accent);
   border-radius: 2px;
   transition: width 0.3s ease;
@@ -5208,7 +5209,7 @@ body.theme-light .modal-content {
 }
 
 .progress-bar-fill {
-  height: 100%;
+  min-height: 100vh;
   background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%);
   border-radius: 2px;
   transition: width 0.3s ease;
