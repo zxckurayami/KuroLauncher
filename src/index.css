@@ -1364,18 +1364,18 @@ tr:hover {
 .profile-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
+  align-items: stretch;
 }
 
-.profile-actions .button {
-  min-width: 120px;
-  padding: 8px 16px;
+.profile-actions button {
+  flex: 1 1 auto;
+  min-width: 100px;
+  max-width: 140px;
+  height: 36px;
+  padding: 8px 12px;
   font-size: 13px;
-}
-
-.profile-actions .btn,
-.profile-actions .outline-button {
-  min-width: 140px;
+  font-weight: 500;
 }
 
 .hint {
