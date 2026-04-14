@@ -1190,9 +1190,9 @@ function App() {
                         {' • '}{profile.ram === 'auto' ? 'Авто' : profile.ram} • {profile.offline ? 'Offline' : 'Online'}
                       </div>
                     </div>
-                    <div className="profile-actions">
+                    <div className="profile-buttons">
                       <button
-                        className="button"
+                        className="button launch-button"
                         onClick={() => launchProfile(profile)}
                         disabled={gameRunning}
                       >

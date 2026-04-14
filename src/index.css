@@ -1362,23 +1362,7 @@ tr:hover {
   min-width: 0;
 }
 
-.profile-actions {
-  display: flex !important;
-  flex-direction: row !important;
-  gap: 8px;
-  align-items: center;
-  justify-content: space-between !important;
-  flex: 0 0 auto;
-}
 
-.profile-actions button {
-  width: 120px;
-  height: 36px;
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 500;
-  flex: 0 0 auto !important;
-}
 
 .hint {
   font-size: 12px;
@@ -1466,16 +1450,26 @@ tr:hover {
   gap: 12px;
 }
 
-.profile-card,
 .installed-item,
 .version-card {
   padding: 12px 16px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: all var(--transition-fast);
+  font-style: normal;
+}
+
+.profile-card {
+  padding: 12px 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   transition: all var(--transition-fast);
   font-style: normal;
@@ -1492,18 +1486,24 @@ tr:hover {
   color: var(--text-primary);
 }
 
+
+
 .profile-details {
-  grid-column: 1;
-  grid-row: 1 / -1;
+  text-align: left;
 }
 
-.profile-actions {
-  grid-column: 2;
-  grid-row: 1 / -1;
+.profile-buttons {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  justify-content: flex-start;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.profile-buttons .launch-button {
+  margin-right: auto;
+}
+
+.profile-buttons .delete-button {
+  margin-left: auto;
 }
 
 .profile-meta,
@@ -1513,10 +1513,9 @@ tr:hover {
   margin-top: 4px;
 }
 
-.profile-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
+.profile-card .launch-button,
+.profile-card .delete-button {
+  flex-shrink: 0;
 }
 
 /* VERSION FILTERS */
