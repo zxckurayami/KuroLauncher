@@ -698,6 +698,7 @@ input[type="radio"] {
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
   padding: var(--spacing-lg);
+  overflow: visible;
 }
 
 .glass-card {
@@ -2395,9 +2396,8 @@ body.theme-light .header {
   flex: 1;
   position: relative;
   z-index: 10;
-  min-height: calc(100vh - 172px);
-  overflow-y: auto;
-  overflow-x: hidden;
+  height: auto;
+  overflow: visible;
 }
 
 
