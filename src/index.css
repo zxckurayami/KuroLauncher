@@ -2054,17 +2054,6 @@ body {
   transition: background 0.3s ease, color 0.3s ease;
   font-style: normal;
 }
-  overflow: auto;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  letter-spacing: 0.5px;
-  transition: background 0.3s ease, color 0.3s ease;
-  font-style: normal;
-}
 
 code, pre {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
