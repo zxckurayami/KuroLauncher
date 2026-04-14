@@ -1238,37 +1238,33 @@ function App() {
                 </label>
                 <label>
                   Загрузчик
-                  <div style={{ marginTop: 8 }}>
-                      <CustomSelect
-                      options={[
-                        { value: '', label: 'Любой' },
-                        { value: 'fabric', label: 'Fabric' },
-                        { value: 'forge', label: 'Forge' },
-                        { value: 'quilt', label: 'Quilt' },
-                        { value: 'neoforge', label: 'NeoForge' }
-                      ]}
-                      value={modrinthSearchLoader}
-                      onChange={(val: string) => setModrinthSearchLoader(val)}
-                      placeholder="Загрузчик"
-                    />
-                  </div>
+                  <CustomSelect
+                    options={[
+                      { value: '', label: 'Любой' },
+                      { value: 'fabric', label: 'Fabric' },
+                      { value: 'forge', label: 'Forge' },
+                      { value: 'quilt', label: 'Quilt' },
+                      { value: 'neoforge', label: 'NeoForge' }
+                    ]}
+                    value={modrinthSearchLoader}
+                    onChange={(val: string) => setModrinthSearchLoader(val)}
+                    placeholder="Загрузчик"
+                  />
                 </label>
                 <label>
                   Тип контента
-                  <div style={{ marginTop: 8 }}>
-                    <CustomSelect
-                      options={[
-                        { value: 'all', label: 'Все' },
-                        { value: 'mod', label: 'Моды' },
-                        { value: 'modpack', label: 'Модпаки' },
-                        { value: 'resourcepack', label: 'Ресурсы' },
-                        { value: 'shader', label: 'Шейдеры' }
-                      ]}
-                      value={modrinthSearchType}
-                      onChange={(val: string) => setModrinthSearchType(val)}
-                      placeholder="Тип"
-                    />
-                  </div>
+                  <CustomSelect
+                    options={[
+                      { value: 'all', label: 'Все' },
+                      { value: 'mod', label: 'Моды' },
+                      { value: 'modpack', label: 'Модпаки' },
+                      { value: 'resourcepack', label: 'Ресурсы' },
+                      { value: 'shader', label: 'Шейдеры' }
+                    ]}
+                    value={modrinthSearchType}
+                    onChange={(val: string) => setModrinthSearchType(val)}
+                    placeholder="Тип"
+                  />
                 </label>
                 <button className="button" onClick={() => searchModrinth(1)} disabled={modrinthLoading}>Искать</button>
               </div>
