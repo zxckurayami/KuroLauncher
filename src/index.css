@@ -1473,9 +1473,9 @@ tr:hover {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
   gap: 12px;
   transition: all var(--transition-fast);
   font-style: normal;
@@ -1490,6 +1490,20 @@ tr:hover {
 .profile-name {
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.profile-details {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+
+.profile-actions {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: flex-start;
 }
 
 .profile-meta,

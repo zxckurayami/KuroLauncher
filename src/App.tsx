@@ -1181,7 +1181,7 @@ function App() {
               <div className="profiles-list">
                 {profiles.map((profile) => (
                   <article key={profile.id} className="profile-card">
-                    <div>
+                    <div className="profile-details">
                       <div className="profile-name">{profile.name}</div>
                       <div className="profile-meta">
                         {profile.versionId}
