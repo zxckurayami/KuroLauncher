@@ -1367,7 +1367,12 @@ tr:hover {
   gap: 12px;
 }
 
-.profile-actions .button,
+.profile-actions .button {
+  min-width: 120px;
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
 .profile-actions .btn,
 .profile-actions .outline-button {
   min-width: 140px;
