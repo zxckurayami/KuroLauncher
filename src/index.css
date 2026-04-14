@@ -2029,8 +2029,12 @@ body[data-accent="white"] {
 
 html, body, #root {
   width: 100%;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100vh;
+}
+
+html {
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 body {
@@ -2038,11 +2042,12 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   letter-spacing: 0.5px;
-  overflow: hidden;
   transition: background 0.3s ease, color 0.3s ease;
   font-style: normal;
   display: flex;
   flex-direction: column;
+  min-height: 100vh;
+  overflow-x: hidden;
 }
 
 code, pre {
@@ -2387,6 +2392,7 @@ body.theme-light .header {
   overflow-x: hidden;
   position: relative;
   z-index: 10;
+  min-height: 0;
 }
 
 .content::-webkit-scrollbar {
