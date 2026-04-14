@@ -2039,8 +2039,9 @@ html, body, #root {
   min-height: 100vh;
 }
 
-html {
-  min-height: 100vh;
+html, body {
+  height: 100%;
+  overflow: auto;
 }
 
 body {
@@ -2050,10 +2051,20 @@ body {
   letter-spacing: 0.5px;
   transition: background 0.3s ease, color 0.3s ease;
   font-style: normal;
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
+}
+
+html, body {
+  height: 100%;
   overflow: auto;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  letter-spacing: 0.5px;
+  transition: background 0.3s ease, color 0.3s ease;
+  font-style: normal;
 }
 
 code, pre {
