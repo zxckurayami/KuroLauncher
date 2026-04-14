@@ -114,6 +114,17 @@ body[data-accent="white"] .button {
   color: #000000 !important;
 }
 
+/* White accent delete button colors */
+body[data-accent="white"] .delete-button {
+  border-color: rgba(100, 100, 100, 0.5);
+  color: #666666;
+}
+
+body[data-accent="white"] .delete-button:hover {
+  background: rgba(100, 100, 100, 0.2);
+  border-color: #666666;
+}
+
 html, body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
@@ -1729,7 +1740,7 @@ tr:hover {
   color: #ef4444;
 }
 
-.delete-button:hover {
+body:not([data-accent="white"]) .delete-button:hover {
   background: rgba(239, 68, 68, 0.15);
   border-color: #ef4444;
 }
