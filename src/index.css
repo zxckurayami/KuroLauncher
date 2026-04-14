@@ -1386,6 +1386,8 @@ tr:hover {
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
   transition: all var(--transition-fast);
+  min-height: auto;
+  overflow: visible;
 }
 
 .panel:hover {
@@ -2052,9 +2054,6 @@ body {
   transition: background 0.3s ease, color 0.3s ease;
   font-style: normal;
 }
-
-html, body {
-  height: 100%;
   overflow: auto;
 }
 
@@ -2406,26 +2405,6 @@ body.theme-light .header {
   padding: 32px 24px;
   position: relative;
   z-index: 10;
-}
-
-
-
-.content::-webkit-scrollbar {
-  width: 8px;
-}
-
-.content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.content::-webkit-scrollbar-thumb {
-  background: rgba(255, 46, 46, 0.2);
-  border-radius: 4px;
-  transition: background 0.3s ease;
-}
-
-.content::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 46, 46, 0.4);
 }
 
 /* ============================================================
