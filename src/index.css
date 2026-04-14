@@ -1374,6 +1374,7 @@ tr:hover {
   padding: 8px 12px;
   font-size: 13px;
   font-weight: 500;
+  flex: 0 0 auto !important;
 }
 
 .hint {
