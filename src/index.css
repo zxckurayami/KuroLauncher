@@ -2738,8 +2738,8 @@ textarea {
 
 /* Checkbox */
 input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   cursor: pointer;
   accent-color: var(--accent);
 }
@@ -2747,9 +2747,10 @@ input[type="checkbox"] {
 .checkbox-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   cursor: pointer;
   font-style: normal;
+  padding: 4px 0;
 }
 
 /* Range Slider */
