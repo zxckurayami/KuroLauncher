@@ -1736,13 +1736,13 @@ tr:hover {
 }
 
 .delete-button {
-  border-color: rgba(239, 68, 68, 0.3);
-  color: #ef4444;
+  border-color: var(--accent-border);
+  color: var(--accent-dark);
 }
 
-body:not([data-accent="white"]) .delete-button:hover {
-  background: rgba(239, 68, 68, 0.15);
-  border-color: #ef4444;
+.delete-button:hover {
+  background: var(--accent-bg);
+  border-color: var(--accent);
 }
 
 .button {
