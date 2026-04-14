@@ -1375,6 +1375,8 @@ tr:hover {
 .versions-grid .panel,
 .modrinth-grid .panel {
   width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
 .panel {
@@ -1542,6 +1544,8 @@ tr:hover {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 500px;
+  overflow-y: auto;
 }
 
 .version-id {
@@ -1556,6 +1560,8 @@ tr:hover {
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 16px;
   margin: 16px 0;
+  max-height: 600px;
+  overflow-y: auto;
 }
 
 .search-card,
