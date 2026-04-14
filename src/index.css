@@ -1690,6 +1690,8 @@ tr:hover {
   cursor: pointer;
   transition: all var(--transition-fast);
   font-style: normal;
+  height: 44px;
+  box-sizing: border-box;
 }
 
 .outline-button:hover:not(:disabled) {
@@ -1724,6 +1726,8 @@ tr:hover {
   cursor: pointer;
   transition: all var(--transition-fast);
   font-style: normal;
+  height: 44px;
+  box-sizing: border-box;
 }
 
 .button:hover {
@@ -2422,6 +2426,8 @@ body.theme-light .header {
   overflow: hidden;
   user-select: none;
   font-style: normal;
+  height: 44px;
+  box-sizing: border-box;
 }
 
 /* PRIMARY BUTTON */
@@ -2585,6 +2591,9 @@ select,
   font-family: inherit;
   width: 100%;
   font-style: normal;
+  line-height: 1.5;
+  height: 44px;
+  box-sizing: border-box;
 }
 
 body.theme-light input[type="text"],
@@ -2624,6 +2633,8 @@ body.theme-light textarea::placeholder {
 textarea {
   resize: vertical;
   min-height: 100px;
+  height: auto;
+  line-height: 1.5;
 }
 
 /* Custom Select */
