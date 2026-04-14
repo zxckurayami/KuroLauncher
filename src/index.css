@@ -1367,9 +1367,14 @@ tr:hover {
 .profiles-grid,
 .versions-grid,
 .modrinth-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-lg);
+}
+
+.versions-grid .panel,
+.modrinth-grid .panel {
+  width: 100%;
 }
 
 .panel {
@@ -2388,11 +2393,15 @@ body.theme-light .header {
   margin-top: 172px;
   padding: 32px 24px;
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
   position: relative;
   z-index: 10;
-  min-height: 0;
+  min-height: calc(100vh - 172px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.content > * {
+  min-height: 100%;
 }
 
 .content::-webkit-scrollbar {
