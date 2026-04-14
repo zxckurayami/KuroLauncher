@@ -2396,6 +2396,30 @@ body.theme-light .header {
   z-index: 10;
 }
 
+.scrollable-content {
+  max-height: calc(100vh - 172px - 64px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.scrollable-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scrollable-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollable-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 46, 46, 0.2);
+  border-radius: 4px;
+  transition: background 0.3s ease;
+}
+
+.scrollable-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 46, 46, 0.4);
+}
+
 /* ============================================================
    КНОПКИ
    =========================================================== */

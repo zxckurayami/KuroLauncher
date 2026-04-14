@@ -1069,7 +1069,7 @@ function App() {
         )}
 
         {activeTab === 'Versions' && (
-          <section className="versions-grid">
+          <section className="versions-grid scrollable-content">
             <div className="panel panel large">
               <div className="panel-title">Доступные версии ({filteredVersions.length})</div>
 
@@ -1224,7 +1224,7 @@ function App() {
         )}
 
         {activeTab === 'Mods' && (
-          <section className="modrinth-grid">
+          <section className="modrinth-grid scrollable-content">
             <div className="panel panel large">
               <div className="panel-title">Браузер модов</div>
               <div className="form-grid">
