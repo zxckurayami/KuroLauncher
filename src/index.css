@@ -2746,19 +2746,22 @@ input[type="checkbox"] {
 }
 
 .checkbox-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
   cursor: pointer;
   font-style: normal;
   width: 100%;
+  min-height: 40px;
   height: 40px;
   padding: 8px 12px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
   transition: all var(--transition-fast);
+  box-sizing: border-box;
 }
 
 .checkbox-row:hover {
