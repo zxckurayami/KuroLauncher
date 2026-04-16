@@ -1,3 +1,4 @@
+<img width="256" height="256" alt="KuroLauncher" src="https://github.com/user-attachments/assets/ecdeb40c-f373-449b-9930-d6304bd7756a" />
 # KuroLauncher
 
 KuroLauncher — современный лаунчер Minecraft на базе Electron и React с атмосферным glassmorphism-интерфейсом, поддержкой профилей, модлоадеров, модпаков и гибкой настройкой запуска.
