@@ -1,6 +1,6 @@
 # KuroLauncher
 
-Modern Minecraft launcher with a dark Japanese glassmorphism theme.
+Современный лаунчер Minecraft с тёмной японской темой в стиле glassmorphism.
 
 ## Особенности
 
