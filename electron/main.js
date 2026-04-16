@@ -14,6 +14,7 @@ const url = require('url')
 
 // Paths will be initialized when app is ready
 let userData, minecraftPath, versionsPath, profilesPath, settingsPath, authPath, modsPath, shaderpacksPath, resourcepacksPath, modpacksPath, modrinthCachePath
+const defaultLauncherSettings = { theme: 'dark', javaPath: 'java', ram: 'auto', fullscreen: false }
 
 async function ensureStorage() {
   await fs.mkdir(userData, { recursive: true })
@@ -24,7 +25,7 @@ async function ensureStorage() {
   await fs.mkdir(resourcepacksPath, { recursive: true })
   await fs.mkdir(modpacksPath, { recursive: true })
   if (!fsSync.existsSync(profilesPath)) await fs.writeFile(profilesPath, '[]')
-  if (!fsSync.existsSync(settingsPath)) await fs.writeFile(settingsPath, JSON.stringify({ theme: 'dark', javaPath: 'java', ram: 'auto' }, null, 2))
+  if (!fsSync.existsSync(settingsPath)) await fs.writeFile(settingsPath, JSON.stringify(defaultLauncherSettings, null, 2))
   if (!fsSync.existsSync(authPath)) await fs.writeFile(authPath, JSON.stringify({}), 'utf-8')
   if (!fsSync.existsSync(modrinthCachePath)) await fs.writeFile(modrinthCachePath, JSON.stringify({}, null, 2), 'utf-8')
 }
@@ -145,7 +146,7 @@ async function downloadFile(url, destination) {
   }
 }
 
-async function downloadAndInstallJava(majorVersion, event = null) {
+async function downloadAndInstallJava(majorVersion, event = null, maxRetries = 3) {
   const javaDir = path.join(userData, 'java')
   const jdkDir = path.join(javaDir, `jdk-${majorVersion}`)
   const javaExe = path.join(jdkDir, 'bin', 'java.exe')
@@ -158,47 +159,68 @@ async function downloadAndInstallJava(majorVersion, event = null) {
   console.log(`Downloading Java ${majorVersion}...`)
   event?.sender.send('launcher:launchProgress', { message: `Загрузка Java ${majorVersion}...` })
 
-  try {
-    const downloadUrl = `https://api.adoptium.net/v3/binary/latest/${majorVersion}/ga/windows/x64/jdk/hotspot/normal/eclipse`
-    const filename = path.basename(downloadUrl)
+  let lastError = null
+
+  async function flattenExtractedJdkDirectory(targetDir) {
+    const entries = await fs.readdir(targetDir, { withFileTypes: true })
+    const subdirectories = entries.filter((entry) => entry.isDirectory())
+    if (subdirectories.length !== 1) return false
+
+    const nestedDir = path.join(targetDir, subdirectories[0].name)
+    const nestedJavaExe = path.join(nestedDir, 'bin', 'java.exe')
+    if (!fsSync.existsSync(nestedJavaExe)) return false
+
+    const nestedEntries = await fs.readdir(nestedDir)
+    for (const entry of nestedEntries) {
+      await fs.rename(path.join(nestedDir, entry), path.join(targetDir, entry))
+    }
+    await fs.rmdir(nestedDir)
+    return true
+  }
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const versionToTry = majorVersion
+    console.log(`Trying Java ${versionToTry} (attempt ${attempt + 1}/${maxRetries})...`)
+
+    let downloadUrl = `https://api.adoptium.net/v3/binary/latest/${versionToTry}/ga/windows/x64/jdk/hotspot/normal/eclipse`
+    const filename = `jdk-${versionToTry}.zip`
     const tempZip = path.join(javaDir, filename)
 
-    // Download JDK
-    await downloadFile(downloadUrl, tempZip)
+    try {
+      await downloadFile(downloadUrl, tempZip)
 
-    // Extract ZIP
-    await fs.mkdir(jdkDir, { recursive: true })
-    const zip = new AdmZip(tempZip)
-    zip.extractAllTo(jdkDir, true)
+      await fs.mkdir(jdkDir, { recursive: true })
+      const zip = new AdmZip(tempZip)
+      zip.extractAllTo(jdkDir, true)
 
-    // Clean up
-    await fs.unlink(tempZip)
+      await fs.unlink(tempZip)
 
-    // Find the actual JDK directory (Adoptium zips have a subdirectory)
-    const entries = await fs.readdir(jdkDir)
-    if (entries.length === 1 && entries[0].startsWith('jdk-')) {
-      const actualJdkDir = path.join(jdkDir, entries[0])
-      const actualJavaExe = path.join(actualJdkDir, 'bin', 'java.exe')
-      if (fsSync.existsSync(actualJavaExe)) {
-        // Move contents up
-        const files = await fs.readdir(actualJdkDir)
-        for (const file of files) {
-          await fs.rename(path.join(actualJdkDir, file), path.join(jdkDir, file))
-        }
-        await fs.rmdir(actualJdkDir)
+      if (!fsSync.existsSync(javaExe)) {
+        await flattenExtractedJdkDirectory(jdkDir)
       }
-    }
 
-    if (!fsSync.existsSync(javaExe)) {
-      throw new Error(`Java executable not found after extraction`)
+      if (fsSync.existsSync(javaExe)) {
+        const installedMajor = getJavaVersionMajor(javaExe)
+        if (installedMajor !== null && installedMajor >= majorVersion) {
+          console.log(`Java ${installedMajor} installed successfully`)
+          return javaExe
+        }
+        console.warn(`Downloaded Java at ${javaExe}, but detected version ${installedMajor}; expected ${majorVersion}+`)
+        lastError = new Error(`Скачанная Java имеет версию ${installedMajor}, ожидалась ${majorVersion}+`)
+      } else {
+        lastError = new Error(`После распаковки Java ${versionToTry} не найден файл ${javaExe}`)
+      }
+    } catch (error) {
+      console.warn(`Failed to download Java ${versionToTry}:`, error.message)
+      lastError = error
     }
-
-    console.log(`Java ${majorVersion} installed successfully`)
-    return javaExe
-  } catch (error) {
-    console.error('Failed to download/install Java:', error.message)
-    throw error
   }
+
+  const details = lastError && typeof lastError.message === 'string' && lastError.message
+    ? lastError.message
+    : String(lastError || 'неизвестная ошибка')
+  console.error(`Failed to download/install Java ${majorVersion}:`, details)
+  throw new Error(`Не удалось скачать Java ${majorVersion}: ${details}`)
 }
 
 async function getNeoForgedVersionsFromMaven(minecraftVersion) {
@@ -216,19 +238,35 @@ async function getNeoForgedVersionsFromMaven(minecraftVersion) {
     
     console.log('Total NeoForge versions in Maven:', versions.length)
     
-    const mcVersion = minecraftVersion.replace('1.', '')
-    const mcParts = mcVersion.split('.')
-    let mcMajor = parseInt(mcParts[0], 10)
-    let mcMinor = mcParts.length > 1 ? parseInt(mcParts[1], 10) : 0
-    
-    console.log('Looking for MC version:', minecraftVersion, '-> NF major.minor:', mcMajor + '.' + mcMinor)
-    
+    // NeoForge version format: <nfMajor>.<nfMinor>.<patch>
+    // NeoForge only exists for MC 1.20.1+.
+    // The mapping from MC version to NeoForge major.minor is NOT always 1:1:
+    //   MC 1.20.1 -> NeoForge 20.4.x  (NF started with minor=4 for historical reasons)
+    //   MC 1.20.2 -> NeoForge 20.2.x
+    //   MC 1.20.4 -> NeoForge 20.4.x  (same branch as 1.20.1)
+    //   MC 1.20.6 -> NeoForge 20.6.x
+    //   MC 1.21   -> NeoForge 21.0.x
+    //   MC 1.21.1 -> NeoForge 21.1.x
+    const MC_TO_NF_MINOR = { '1.20.1': 4, '1.20.4': 4 }
+    const mcParts = minecraftVersion.split('.')
+    const mcMajor = parseInt(mcParts[1] || '0', 10)
+    const mcMinor = parseInt(mcParts[2] || '0', 10)
+
+    // NeoForge only supports 1.20.1+
+    if (mcMajor < 20 || (mcMajor === 20 && mcMinor < 1)) {
+      console.log('NeoForge not available for MC', minecraftVersion, '(requires 1.20.1+)')
+      return []
+    }
+
+    const nfMinor = MC_TO_NF_MINOR[minecraftVersion] !== undefined
+      ? MC_TO_NF_MINOR[minecraftVersion]
+      : mcMinor
+
+    console.log('Looking for MC version:', minecraftVersion, '-> NF major.minor:', mcMajor + '.' + nfMinor)
+
     versions = versions.filter(v => {
       const parts = v.split('.')
-      const nfMajor = parseInt(parts[0], 10)
-      const nfMinor = parseInt(parts[1], 10)
-      
-      return nfMajor === mcMajor && nfMinor === mcMinor
+      return parseInt(parts[0], 10) === mcMajor && parseInt(parts[1], 10) === nfMinor
     })
     
     console.log('NeoForge versions for', minecraftVersion, ': found', versions.length)
@@ -454,7 +492,7 @@ function chooseModrinthFile(files, projectType) {
 }
 
 async function installModrinthVersion(version, options = {}) {
-  const { projectType = 'mod', gameVersion = '', loader = '', visited = new Set() } = options
+  const { projectType = 'mod', gameVersion = '', loader = '', visited = new Set(), project = null } = options
   if (!version) throw new Error('Версия Modrinth не найдена для установки')
 
   const file = chooseModrinthFile(version.files, projectType)
@@ -471,7 +509,12 @@ async function installModrinthVersion(version, options = {}) {
   await downloadFile(file.url, destination)
 
   if (projectType === 'modpack') {
-    await installModrinthModpackArchive(destination, version)
+    await installModrinthModpackArchive(destination, version, project)
+    try {
+      await fs.unlink(destination)
+    } catch {
+      // ignore temp archive cleanup errors
+    }
     return true
   }
 
@@ -507,27 +550,184 @@ async function resolveModrinthDependencies(version, options = {}) {
   return installed
 }
 
-async function installModrinthModpackArchive(filePath, version) {
+async function installModrinthModpackArchive(filePath, version, project = null) {
   const projectId = version.project_id || 'modpack'
+  const projectTitle = project?.title || null
+  let installed = { mods: [], resourcepacks: [], shaderpacks: [] }
   const extractDir = path.join(modpacksPath, `${projectId}-${version.id}`)
+  if (fsSync.existsSync(extractDir)) {
+    await fs.rm(extractDir, { recursive: true, force: true })
+  }
   const zip = new AdmZip(filePath)
   zip.extractAllTo(extractDir, true)
 
-  const indexPath = path.join(extractDir, 'modrinth.index.json')
-  if (fsSync.existsSync(indexPath)) {
-    const indexData = JSON.parse(await fs.readFile(indexPath, 'utf-8'))
-    const installDirs = ['mods', 'resourcepacks', 'shaderpacks']
-    for (const name of installDirs) {
-      const sourceDir = path.join(extractDir, name)
-      if (fsSync.existsSync(sourceDir)) {
-        const destinationDir = name === 'mods' ? modsPath : name === 'resourcepacks' ? resourcepacksPath : shaderpacksPath
+  // Determine likely root (some archives contain a single top-level folder)
+  let root = extractDir
+  try {
+    const top = await fs.readdir(extractDir, { withFileTypes: true })
+    if (top.length === 1 && top[0].isDirectory()) {
+      root = path.join(extractDir, top[0].name)
+    }
+  } catch (e) {}
+
+  async function findCandidates(name) {
+    const candidates = []
+    const direct = path.join(root, name)
+    if (fsSync.existsSync(direct)) candidates.push(direct)
+    const overrides = path.join(root, 'overrides', name)
+    if (fsSync.existsSync(overrides)) candidates.push(overrides)
+    try {
+      const entries = await fs.readdir(root, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const nested = path.join(root, entry.name, name)
+        if (fsSync.existsSync(nested)) candidates.push(nested)
+        const nestedOverrides = path.join(root, entry.name, 'overrides', name)
+        if (fsSync.existsSync(nestedOverrides)) candidates.push(nestedOverrides)
+      }
+    } catch (e) {}
+    return candidates
+  }
+
+  const installDirs = ['mods', 'resourcepacks', 'shaderpacks']
+  
+  // Create modpack-specific directories
+  const modpackDir = path.join(modpacksPath, `${projectId}-${version.id}`)
+  const modpackModsPath = path.join(modpackDir, 'mods')
+  const modpackResourcepacksPath = path.join(modpackDir, 'resourcepacks')
+  const modpackShaderpacksPath = path.join(modpackDir, 'shaderpacks')
+  const modpackConfigPath = path.join(modpackDir, 'config')
+  
+  await fs.mkdir(modpackModsPath, { recursive: true })
+  await fs.mkdir(modpackResourcepacksPath, { recursive: true })
+  await fs.mkdir(modpackShaderpacksPath, { recursive: true })
+  await fs.mkdir(modpackConfigPath, { recursive: true })
+
+  for (const name of installDirs) {
+    // Also copy loose .jar/.zip files from root for mods
+    if (name === 'mods') {
+      try {
+        const rootFiles = await fs.readdir(root, { withFileTypes: true })
+        for (const entry of rootFiles) {
+          if (!entry.isFile()) continue
+          const lower = entry.name.toLowerCase()
+          if (lower.endsWith('.jar') || lower.endsWith('.zip')) {
+            const src = path.join(root, entry.name)
+            const dst = path.join(modpackModsPath, entry.name)
+            try {
+              await fs.copyFile(src, dst)
+              installed.mods.push(entry.name)
+            } catch (e) {
+              console.warn(`Failed to copy loose mod file ${src}:`, e && e.message)
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    const sources = await findCandidates(name)
+    for (const sourceDir of sources) {
+      try {
+        const destinationDir = name === 'mods' ? modpackModsPath : name === 'resourcepacks' ? modpackResourcepacksPath : modpackShaderpacksPath
         await fs.mkdir(destinationDir, { recursive: true })
         const files = await fs.readdir(sourceDir)
         for (const entry of files) {
-          await fs.copyFile(path.join(sourceDir, entry), path.join(destinationDir, entry))
+          const src = path.join(sourceDir, entry)
+          const dst = path.join(destinationDir, entry)
+          try {
+            await fs.copyFile(src, dst)
+            installed[name].push(entry)
+          } catch (e) {
+            console.warn(`Failed to copy file ${src} -> ${dst}:`, e && e.message)
+          }
         }
+      } catch (e) {
+        console.warn(`Failed to copy ${name} from ${sourceDir}:`, e && e.message)
       }
     }
+  }
+  
+  // Also copy config directory if exists
+  const configCandidates = [
+    path.join(root, 'config'),
+    path.join(root, 'overrides', 'config')
+  ]
+  for (const configSrc of configCandidates) {
+    if (fsSync.existsSync(configSrc)) {
+      try {
+        const configFiles = await fs.readdir(configSrc)
+        for (const entry of configFiles) {
+          const src = path.join(configSrc, entry)
+          const dst = path.join(modpackConfigPath, entry)
+          try {
+            await fs.copyFile(src, dst)
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+  }
+
+  // After copying, try to detect loader by inspecting copied mod jars
+  async function detectLoaderFromJarPaths(paths) {
+    try {
+      for (const p of paths) {
+        const lower = String(p).toLowerCase()
+        if (!lower.endsWith('.jar') && !lower.endsWith('.zip')) continue
+        try {
+          const zip = new AdmZip(p)
+          const entries = zip.getEntries().map(e => e.entryName.toLowerCase())
+          // Fabric
+          if (entries.some(n => n.endsWith('fabric.mod.json') || n.includes('fabric/loader') || n.includes('fabric_mod'))) return 'fabric'
+          // Quilt
+          if (entries.some(n => n.endsWith('quilt.mod.json') || n.includes('quilt/') || n.includes('quilt_loader'))) return 'quilt'
+          // Forge
+          if (entries.some(n => n.includes('meta-inf/mods.toml') || n.includes('mcmod.info') || n.includes('mods.toml'))) return 'forge'
+          // Neoforge heuristic
+          if (lower.includes('neoforge')) return 'neoforge'
+          // Filename heuristics
+          if (lower.includes('fabric')) return 'fabric'
+          if (lower.includes('quilt')) return 'quilt'
+          if (lower.includes('forge')) return 'forge'
+        } catch (e) {
+          // not a zip or failed to read — ignore
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return null
+  }
+
+  let detectedLoader = null
+  try {
+    const modPaths = installed.mods.map((name) => path.join(modpackModsPath, name)).filter(p => fsSync.existsSync(p))
+    detectedLoader = await detectLoaderFromJarPaths(modPaths)
+    if (detectedLoader) console.log('Detected loader from jars:', detectedLoader)
+  } catch (e) {
+    console.warn('Loader detection failed:', e && e.message)
+  }
+
+  // Deduplicate installed files
+  for (const key of Object.keys(installed)) {
+    if (Array.isArray(installed[key])) {
+      installed[key] = [...new Set(installed[key])]
+    }
+  }
+
+  // Save meta info for this modpack so UI can map files to modpack
+  try {
+    const meta = {
+      projectId,
+      versionId: version.id,
+      projectTitle: projectTitle,
+      gameVersions: version.game_versions || [],
+      installed,
+      detectedLoader: detectedLoader || null,
+      installedAt: Date.now()
+    }
+    await saveJson(path.join(modpacksPath, `${projectId}-${version.id}.meta.json`), meta)
+  } catch (e) {
+    console.warn('Failed to save modpack meta file:', e && e.message)
   }
 }
 
@@ -541,36 +741,433 @@ async function installModrinthProject(projectId, options = {}) {
   }
 
   if (project.project_type === 'modpack') {
-    await installModrinthVersion(version, { projectType: 'modpack', gameVersion, loader })
-    await saveProfile({
+    const modpackProjectId = version.project_id || projectId
+    await installModrinthVersion(version, { projectType: 'modpack', gameVersion, loader, project })
+    const gameVersionModpack = version.game_versions?.[0] || '1.20.1'
+    const extractDir = path.join(modpacksPath, `${modpackProjectId}-${version.id}`)
+    const modpackDir = path.join(modpacksPath, `${modpackProjectId}-${version.id}`)
+    const modpackModsPath = path.join(modpackDir, 'mods')
+    let modpackLoader = loader || 'vanilla'
+    let modpackLoaderRequiredVersion = null
+    
+    // Also check meta produced during extraction for detected loader
+    // NOTE: installModrinthModpackArchive saves meta using projectId (version.project_id || 'modpack')
+    // So we need to use the same key
+    const metaProjectId = version.project_id || 'modpack'
+    try {
+      const metaPath = path.join(modpacksPath, `${metaProjectId}-${version.id}.meta.json`)
+      console.log(`[Modrinth] Reading meta from: ${metaPath}, exists: ${fsSync.existsSync(metaPath)}`)
+      if (fsSync.existsSync(metaPath)) {
+        const meta = JSON.parse(fsSync.readFileSync(metaPath, 'utf-8'))
+        console.log(`[Modrinth] Meta contents:`, JSON.stringify(meta))
+        console.log(`[Modrinth] Meta file detectedLoader: '${meta.detectedLoader}', type: ${typeof meta.detectedLoader}`)
+        // Use detectedLoader if available and not already set
+        if (meta.detectedLoader && (!modpackLoader || modpackLoader === 'vanilla')) {
+          modpackLoader = String(meta.detectedLoader).toLowerCase()
+          console.log(`[Modrinth] Using detected loader from meta file: ${modpackLoader}`)
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to read meta for loader:', e && e.message)
+    }
+
+    // Determine extraction root (handle archives with top-level folder or overrides)
+    // Use same projectId key as in installModrinthModpackArchive for meta file consistency
+    const metaProjectIdForDir = version.project_id || 'modpack'
+    let extractRoot = path.join(modpacksPath, `${metaProjectIdForDir}-${version.id}`)
+    try {
+      const top = await fs.readdir(extractDir, { withFileTypes: true })
+      if (top.length === 1 && top[0].isDirectory()) {
+        extractRoot = path.join(extractDir, top[0].name)
+      } else {
+        for (const entry of top) {
+          if (!entry.isDirectory()) continue
+          const candidate = path.join(extractDir, entry.name)
+          if (fsSync.existsSync(path.join(candidate, 'modrinth.index.json')) ||
+              fsSync.existsSync(path.join(candidate, 'mods')) ||
+              fsSync.existsSync(path.join(candidate, 'overrides', 'mods'))) {
+            extractRoot = candidate
+            break
+          }
+        }
+      }
+    } catch (e) {}
+
+    // Try to detect loader from modrinth.index.json (search a few likely locations)
+    console.log(`[Modrinth] Starting index detection, current modpackLoader=${modpackLoader}`)
+    console.log(`[Modrinth] extractRoot=${extractRoot}, extractDir=${extractDir}`)
+    try {
+      let indexPath = null
+      const indexCandidates = [
+        path.join(extractRoot, 'modrinth.index.json'),
+        path.join(extractDir, 'modrinth.index.json'),
+        path.join(extractRoot, 'overrides', 'modrinth.index.json'),
+        path.join(extractDir, 'overrides', 'modrinth.index.json')
+      ]
+      console.log(`[Modrinth] Checking index paths:`, indexCandidates)
+      for (const p of indexCandidates) {
+        console.log(`[Modrinth] Checking: ${p}, exists: ${fsSync.existsSync(p)}`)
+        if (fsSync.existsSync(p)) { indexPath = p; break }
+      }
+      if (indexPath) {
+        console.log(`[Modrinth] Found index at: ${indexPath}`)
+        const indexData = JSON.parse(await fs.readFile(indexPath, 'utf-8'))
+        console.log(`[Modrinth] Index data keys: ${Object.keys(indexData).join(', ')}`)
+        if (indexData.game) console.log(`[Modrinth] indexData.game: ${JSON.stringify(indexData.game)}`)
+        if (indexData.manifest?.minecraft?.modLoaders) console.log(`[Modrinth] modLoaders: ${JSON.stringify(indexData.manifest.minecraft.modLoaders)}`)
+        
+        const projectIds = new Set()
+        const filesToDownload = []
+        if (Array.isArray(indexData.files)) {
+          for (const f of indexData.files) {
+            if (f && f.downloads && f.downloads[0]) {
+              const targetPath = path.join(modpackModsPath, f.path?.split('/').pop() || f.filename)
+              const downloadUrl = f.downloads[0]
+              filesToDownload.push({ url: downloadUrl, target: targetPath })
+            }
+            if (f && (f.project_id || f.projectId || f.project)) {
+              projectIds.add(f.project_id || f.projectId || f.project)
+            }
+          }
+        }
+        console.log(`[Modrinth] Found ${projectIds.size} project IDs in index`)
+        console.log(`[Modrinth] Files to download: ${filesToDownload.length}`)
+        
+        // Download additional modpack files from Modrinth CDN
+        const downloadedFromIndex = []
+        if (filesToDownload.length > 0) {
+          for (const file of filesToDownload) {
+            try {
+              console.log(`[Modrinth] Downloading: ${file.url} -> ${file.target}`)
+              const dir = path.dirname(file.target)
+              await fs.mkdir(dir, { recursive: true })
+              const response = await axios.get(file.url, { responseType: 'stream', timeout: 120000 })
+              const writer = fsSync.createWriteStream(file.target)
+              response.data.pipe(writer)
+              await new Promise((resolve, reject) => {
+                writer.on('finish', resolve)
+                writer.on('error', reject)
+              })
+              const basename = path.basename(file.target)
+              console.log(`[Modrinth] Downloaded: ${basename}`)
+              downloadedFromIndex.push(basename)
+            } catch (e) {
+              console.warn(`[Modrinth] Failed to download ${file.url}:`, e && e.message)
+            }
+          }
+        }
+        // Update meta.json so these files are associated with the modpack (not "standalone")
+        if (downloadedFromIndex.length > 0) {
+          try {
+            const metaPathForIndex = path.join(modpacksPath, `${metaProjectId}-${version.id}.meta.json`)
+            const existingMeta = fsSync.existsSync(metaPathForIndex)
+              ? JSON.parse(fsSync.readFileSync(metaPathForIndex, 'utf-8'))
+              : { projectId: metaProjectId, versionId: version.id, installed: { mods: [], resourcepacks: [], shaderpacks: [] } }
+            if (!existingMeta.installed) existingMeta.installed = { mods: [], resourcepacks: [], shaderpacks: [] }
+            if (!Array.isArray(existingMeta.installed.mods)) existingMeta.installed.mods = []
+            for (const name of downloadedFromIndex) {
+              if (!existingMeta.installed.mods.includes(name)) {
+                existingMeta.installed.mods.push(name)
+              }
+            }
+            await saveJson(metaPathForIndex, existingMeta)
+            console.log(`[Modrinth] Updated meta with ${downloadedFromIndex.length} index-downloaded files`)
+          } catch (e) {
+            console.warn('[Modrinth] Failed to update meta with index downloads:', e && e.message)
+          }
+        }
+
+        for (const pid of projectIds) {
+          try {
+            const proj = await getModrinthProject(pid)
+            if (proj && Array.isArray(proj.loaders)) {
+              const loadersLower = proj.loaders.map((l) => String(l).toLowerCase())
+              if (loadersLower.includes('fabric')) { modpackLoader = 'fabric'; console.log(`[Modrinth] Detected fabric from project ${pid}`); break }
+              if (loadersLower.includes('forge')) { modpackLoader = 'forge'; console.log(`[Modrinth] Detected forge from project ${pid}`); break }
+              if (loadersLower.includes('neoforge')) { modpackLoader = 'neoforge'; console.log(`[Modrinth] Detected neoforge from project ${pid}`); break }
+              if (loadersLower.includes('quilt')) { modpackLoader = 'quilt'; console.log(`[Modrinth] Detected quilt from project ${pid}`); break }
+            }
+          } catch (e) {
+            // ignore per-project errors
+          }
+        }
+
+        if (modpackLoader === 'vanilla') {
+          if (indexData.game && indexData.game.loader) {
+            const gld = String(indexData.game.loader).toLowerCase()
+            if (['fabric','forge','quilt','neoforge'].includes(gld)) modpackLoader = gld
+          }
+          if (indexData.manifest && indexData.manifest.minecraft && Array.isArray(indexData.manifest.minecraft.modLoaders)) {
+            for (const ml of indexData.manifest.minecraft.modLoaders) {
+              const id = String(ml.id || '').toLowerCase()
+              if (id.includes('fabric')) { modpackLoader = 'fabric'; break }
+              if (id.includes('forge')) { modpackLoader = 'forge'; break }
+              if (id.includes('quilt')) { modpackLoader = 'quilt'; break }
+            }
+          }
+        }
+        
+        // Read required fabric-loader version from index dependencies
+        if (indexData.dependencies && indexData.dependencies['fabric-loader']) {
+          const requiredFabric = indexData.dependencies['fabric-loader']
+          console.log(`[Modrinth] Required fabric-loader from index: ${requiredFabric}`)
+          // Parse version like "0.13.3" to number for comparison
+          const parseVer = (v) => {
+            const m = String(v).match(/^0\.(\d+)\.(\d+)/)
+            return m ? parseInt(m[1]) * 100 + parseInt(m[2]) : 0
+          }
+          const requiredVerNum = parseVer(requiredFabric)
+          console.log(`[Modrinth] Required fabric version number: ${requiredVerNum}`)
+          // Store required version for later use in loader selection
+          modpackLoaderRequiredVersion = requiredFabric
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to detect modpack loader from index:', e && e.message)
+    }
+
+    // NOTE: Removed meta file loader detection - it incorrectly overrides the detected loader
+
+    // Fallback: scan mods folder filenames (search a few likely locations)
+    try {
+      const candidates = [
+        path.join(extractRoot, 'mods'),
+        path.join(extractRoot, 'overrides', 'mods'),
+        path.join(extractDir, 'mods'),
+        path.join(extractDir, 'overrides', 'mods')
+      ]
+      for (const modsSourceDir of candidates) {
+        if (!fsSync.existsSync(modsSourceDir)) continue
+        const modFiles = await fs.readdir(modsSourceDir)
+        const modFileNames = modFiles.map(f => f.toLowerCase())
+        console.log(`[Modrinth] Checking mods dir: ${modsSourceDir}, files: ${modFiles.slice(0, 5).join(', ')}`)
+        if (modFileNames.some(f => f.includes('fabric') && (f.includes('api') || f.includes('loader')))) {
+          modpackLoader = 'fabric'
+          console.log(`[Modrinth] Detected fabric from file: ${modFiles.find(f => f.toLowerCase().includes('fabric'))}`)
+          break
+        }
+        if (modFileNames.some(f => f.includes('forge'))) {
+          modpackLoader = 'forge'
+          console.log(`[Modrinth] Detected forge from file: ${modFiles.find(f => f.toLowerCase().includes('forge'))}`)
+          break
+        }
+        if (modFileNames.some(f => f.includes('neoforge'))) {
+          modpackLoader = 'neoforge'
+          console.log(`[Modrinth] Detected neoforge from file: ${modFiles.find(f => f.toLowerCase().includes('neoforge'))}`)
+          break
+        }
+        if (modFileNames.some(f => f.includes('quilt') && f.includes('loader'))) {
+          modpackLoader = 'quilt'
+          console.log(`[Modrinth] Detected quilt from file: ${modFiles.find(f => f.toLowerCase().includes('quilt') && f.toLowerCase().includes('loader'))}`)
+          break
+        }
+      }
+      console.log(`[Modrinth] After fallback scan: modpackLoader=${modpackLoader}`)
+    } catch (e) {
+      console.warn('Failed to detect modpack loader by files:', e && e.message)
+    }
+    
+    console.log(`[Modrinth] FINAL modpackLoader before profile: ${modpackLoader}`)
+    
+    // Store modpack-specific directory paths in profile (reuse modpackDir from line 702)
+    const metaProjectIdForProfile = version.project_id || projectId
+    const modpackProfileDir = path.join(modpacksPath, `${metaProjectIdForProfile}-${version.id}`)
+    const modpackProfile = {
       id: `modpack-${projectId}`,
       name: `Modpack: ${project.title}`,
-      versionId: version.game_versions?.[0] || '1.20.1',
+      versionId: gameVersionModpack,
       ram: '4G',
       javaPath: 'java',
       username: '',
-      offline: true
-    })
-    return true
+      loader: modpackLoader,
+      modpackPath: modpackProfileDir
+    }
+
+    // Try to auto-select a loader version when possible
+    // Use same logic as profile creation (getLoaderVersions API)
+    try {
+      console.log(`[Modrinth] Auto-selecting ${modpackLoader} version for Minecraft ${gameVersionModpack}`)
+
+      let selectedVersion = null
+
+      if (modpackLoader === 'fabric') {
+        const loaders = await getLoaderArtifactListFor(gameVersionModpack)
+        const list = Array.isArray(loaders) ? loaders : Object.values(loaders || {})
+        const versions = list
+          .map((item) => ({
+            version: item?.loader?.version || item?.version || '',
+            label: item?.loader?.version || item?.version || '',
+            stable: item?.loader?.stable || false
+          }))
+          .filter((item) => item.version)
+
+        // Priority: modpack required version, then latest stable
+        if (modpackLoaderRequiredVersion) {
+          selectedVersion = versions.find(v => v.version === modpackLoaderRequiredVersion)
+          if (selectedVersion) {
+            console.log(`[Modrinth] Using modpack required Fabric version: ${selectedVersion.version}`)
+          }
+        }
+        if (!selectedVersion) {
+          const stableVersions = versions.filter(v => v.stable)
+          if (stableVersions.length > 0) {
+            selectedVersion = stableVersions[stableVersions.length - 1] // latest stable
+            console.log(`[Modrinth] Using latest stable Fabric version: ${selectedVersion.version}`)
+          } else {
+            selectedVersion = versions[versions.length - 1] // latest available
+            console.log(`[Modrinth] Using latest available Fabric version: ${selectedVersion.version}`)
+          }
+        }
+
+      } else if (modpackLoader === 'quilt') {
+        const loaders = await getQuiltLoaderVersionsByMinecraft({ minecraftVersion: gameVersionModpack })
+        const list = Array.isArray(loaders) ? loaders : Object.values(loaders || {})
+        const versions = list
+          .map((item) => ({
+            version: item?.loader?.version || item?.version || '',
+            label: item?.loader?.version || item?.version || '',
+            stable: item?.loader?.stable || false
+          }))
+          .filter((item) => item.version)
+
+        const stableVersions = versions.filter(v => v.stable)
+        if (stableVersions.length > 0) {
+          selectedVersion = stableVersions[stableVersions.length - 1] // latest stable
+          console.log(`[Modrinth] Using latest stable Quilt version: ${selectedVersion.version}`)
+        } else {
+          selectedVersion = versions[versions.length - 1] // latest available
+          console.log(`[Modrinth] Using latest available Quilt version: ${selectedVersion.version}`)
+        }
+
+      } else if (modpackLoader === 'forge') {
+        const result = await getForgeVersionList({ minecraft: gameVersionModpack })
+        const versions = Array.isArray(result) ? result : result?.versions || Object.values(result || {})
+        const forgeVersions = versions
+          .map((item) => ({
+            version: item.version,
+            label: item.version,
+            mcversion: item.mcversion,
+            stable: item?.stable || false
+          }))
+          .filter((item) => item.version)
+
+        let selected = forgeVersions.find((item) => item.stable) || forgeVersions[0]
+        if (selected) {
+          selectedVersion = { version: selected.version }
+          console.log(`[Modrinth] Using stable Forge version: ${selectedVersion.version}`)
+        }
+
+      } else if (modpackLoader === 'neoforge') {
+        const versions = await getNeoForgedVersionsFromMaven(gameVersionModpack)
+        const neoforgeVersions = versions
+          .map((item) => ({
+            version: item.version,
+            label: item.version,
+            mcversion: item.mcversion,
+            stable: item.stable
+          }))
+          .filter((item) => item.version)
+
+        const stableVersions = neoforgeVersions.filter(v => v.stable)
+        if (stableVersions.length > 0) {
+          selectedVersion = stableVersions[stableVersions.length - 1] // latest stable
+          console.log(`[Modrinth] Using latest stable NeoForge version: ${selectedVersion.version}`)
+        } else {
+          selectedVersion = neoforgeVersions[neoforgeVersions.length - 1] // latest available
+          console.log(`[Modrinth] Using latest available NeoForge version: ${selectedVersion.version}`)
+        }
+      }
+
+      if (selectedVersion) {
+        modpackProfile.loaderVersion = selectedVersion.version
+        console.log(`[Modrinth] Selected ${modpackLoader} version:`, modpackProfile.loaderVersion)
+      } else {
+        console.warn(`[Modrinth] No ${modpackLoader} version found for Minecraft ${gameVersionModpack}`)
+      }
+    } catch (e) {
+      console.warn('Auto-select loader version failed:', e && e.message)
+    }
+    
+    console.log(`[Modrinth] Creating profile: name=${modpackProfile.name}, versionId=${modpackProfile.versionId}, loader=${modpackProfile.loader}, loaderVersion=${modpackProfile.loaderVersion}`)
+    await saveProfile(modpackProfile)
+    console.log(`[Modrinth] Saved profile successfully with loaderVersion=${modpackProfile.loaderVersion}`)
+    // Update meta file with project title for UI mapping
+    try {
+      const metaPath = path.join(modpacksPath, `${metaProjectIdForProfile}-${version.id}.meta.json`)
+      if (fsSync.existsSync(metaPath)) {
+        const meta = await readJson(metaPath, {})
+        meta.projectTitle = project.title
+        await saveJson(metaPath, meta)
+      } else {
+        await saveJson(metaPath, { projectId, versionId: version.id, projectTitle: project.title, installed: {}, detectedLoader: modpackLoader })
+      }
+    } catch (e) {
+      console.warn('Failed to update modpack meta with title:', e && e.message)
+    }
+    return { success: true, profile: modpackProfile }
   }
 
-  return await installModrinthVersion(version, { projectType: project.project_type, gameVersion, loader })
+  const installResult = await installModrinthVersion(version, { projectType: project.project_type, gameVersion, loader })
+  console.log(`[Modrinth] Установлен проект: ${project.title} (${project.project_type})`)
+  return { success: true, projectType: project.project_type }
 }
 
 async function getInstalledModrinthAddons() {
   const addons = []
+
+  // Build mapping from installed filename -> modpack meta (if available)
+  const originMap = {} // filenameLower -> { projectId, versionId, detectedLoader }
+  try {
+    if (fsSync.existsSync(modpacksPath)) {
+      const metaFiles = await fs.readdir(modpacksPath)
+      for (const mf of metaFiles) {
+        if (!mf.endsWith('.meta.json')) continue
+        try {
+          const meta = JSON.parse(fsSync.readFileSync(path.join(modpacksPath, mf), 'utf-8'))
+          const projectId = meta.projectId || null
+          const versionId = meta.versionId || null
+          const detectedLoader = meta.detectedLoader || null
+          const projectTitle = meta.projectTitle || null
+          if (meta.installed) {
+            // Map all addon types: mods, shaderpacks, resourcepacks
+            const addonTypes = ['mods', 'shaderpacks', 'resourcepacks']
+            for (const type of addonTypes) {
+              if (Array.isArray(meta.installed[type])) {
+                for (const filename of meta.installed[type]) {
+                  if (!filename) continue
+                  const key = String(filename).toLowerCase()
+                  originMap[key] = { projectId, versionId, detectedLoader, projectTitle }
+                  // also map potential .disabled variant
+                  originMap[key + '.disabled'] = { projectId, versionId, detectedLoader, projectTitle }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // ignore bad meta
+        }
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
   const scanDirectory = async (directory, type) => {
     try {
       const entries = await fs.readdir(directory, { withFileTypes: true })
       for (const entry of entries) {
         if (!entry.isFile()) continue
         const enabled = !entry.name.endsWith('.disabled')
+        const cleanName = enabled ? entry.name : entry.name.replace(/\.disabled$/, '')
+        const nameLower = entry.name.toLowerCase()
+        const origin = originMap[nameLower] ? { modpackId: originMap[nameLower].projectId, modpackVersion: originMap[nameLower].versionId, detectedLoader: originMap[nameLower].detectedLoader, projectTitle: originMap[nameLower].projectTitle } : null
         addons.push({
-          id: `${type}:${entry.name}`,
-          name: entry.name,
+          id: `${type}:${cleanName}`,
+          name: cleanName,
           type,
           enabled,
-          path: path.join(directory, entry.name)
+          path: path.join(directory, entry.name),
+          origin
         })
       }
     } catch {
@@ -578,9 +1175,35 @@ async function getInstalledModrinthAddons() {
     }
   }
 
+  // Scan main directories
   await scanDirectory(modsPath, 'mods')
   await scanDirectory(shaderpacksPath, 'shaderpacks')
   await scanDirectory(resourcepacksPath, 'resourcepacks')
+
+  // Also scan modpack directories
+  try {
+    if (fsSync.existsSync(modpacksPath)) {
+      const modpackDirs = await fs.readdir(modpacksPath, { withFileTypes: true })
+      for (const dir of modpackDirs) {
+        if (!dir.isDirectory()) continue
+
+        // Check if this is a modpack directory (has modrinth.index.json or meta.json)
+        const modpackPath = path.join(modpacksPath, dir.name)
+        const hasIndex = fsSync.existsSync(path.join(modpackPath, 'modrinth.index.json'))
+        const hasMeta = fsSync.existsSync(path.join(modpacksPath, `${dir.name}.meta.json`))
+
+        if (hasIndex || hasMeta) {
+          // Scan subdirectories within the modpack
+          await scanDirectory(path.join(modpackPath, 'mods'), 'mods')
+          await scanDirectory(path.join(modpackPath, 'shaderpacks'), 'shaderpacks')
+          await scanDirectory(path.join(modpackPath, 'resourcepacks'), 'resourcepacks')
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('Error scanning modpack directories:', error)
+  }
+
   return addons
 }
 
@@ -591,23 +1214,162 @@ function getAddonDirectory(type) {
   throw new Error(`Неизвестный тип аддона: ${type}`)
 }
 
-async function toggleInstalledAddon(type, name, enabled) {
-  const directory = getAddonDirectory(type)
-  const currentPath = path.join(directory, name)
-  const targetName = enabled ? name.replace(/\.disabled$/, '') : `${name}.disabled`
-  const targetPath = path.join(directory, targetName)
+function isPathInside(parentPath, childPath) {
+  const resolvedParent = path.resolve(parentPath)
+  const resolvedChild = path.resolve(childPath)
+  return resolvedChild === resolvedParent || resolvedChild.startsWith(resolvedParent + path.sep)
+}
 
-  if (!fsSync.existsSync(currentPath)) {
+function resolveManagedAddonPath(type, addonPath) {
+  if (!addonPath) return null
+  try {
+    const resolvedPath = path.resolve(addonPath)
+    const mainDirectory = getAddonDirectory(type)
+    if (isPathInside(mainDirectory, resolvedPath)) return resolvedPath
+    if (modpacksPath && isPathInside(modpacksPath, resolvedPath)) return resolvedPath
+  } catch {
+    return null
+  }
+  return null
+}
+
+async function toggleInstalledAddon(type, name, enabled, addonPath = null) {
+  // name is always the clean name without .disabled
+  // The actual file might be name or name + '.disabled'
+  const possibleNames = [name, name + '.disabled']
+
+  // First try the main directory
+  const mainDirectory = getAddonDirectory(type)
+  let currentPath = resolveManagedAddonPath(type, addonPath)
+
+  if (!currentPath || !fsSync.existsSync(currentPath)) {
+    currentPath = null
+    for (const possibleName of possibleNames) {
+      const testPath = path.join(mainDirectory, possibleName)
+      if (fsSync.existsSync(testPath)) {
+        currentPath = testPath
+        break
+      }
+    }
+  }
+
+  // If not found in main directory, try modpack directories
+  if (!currentPath) {
+    try {
+      if (fsSync.existsSync(modpacksPath)) {
+        const modpackDirs = await fs.readdir(modpacksPath, { withFileTypes: true })
+        for (const dir of modpackDirs) {
+          if (!dir.isDirectory()) continue
+          const modpackPath = path.join(modpacksPath, dir.name)
+          for (const possibleName of possibleNames) {
+            const modpackAddonPath = path.join(modpackPath, type, possibleName)
+            if (fsSync.existsSync(modpackAddonPath)) {
+              currentPath = modpackAddonPath
+              break
+            }
+          }
+          if (currentPath) break
+        }
+      }
+    } catch (error) {
+      // Ignore errors when searching modpack directories
+    }
+  }
+
+  if (!currentPath) {
     throw new Error(`Файл не найден: ${name}`)
   }
+
+  const targetName = enabled ? name : `${name}.disabled`
+  const targetPath = path.dirname(currentPath) + path.sep + targetName
 
   await fs.rename(currentPath, targetPath)
 }
 
-async function deleteInstalledAddon(type, name) {
-  const directory = getAddonDirectory(type)
-  const targetPath = path.join(directory, name)
+async function deleteInstalledAddon(type, name, addonPath = null) {
+  // name is always the clean name without .disabled
+  // The actual file might be name or name + '.disabled'
+  const possibleNames = [name, name + '.disabled']
+
+  // First try the main directory
+  const mainDirectory = getAddonDirectory(type)
+  let targetPath = resolveManagedAddonPath(type, addonPath)
+
+  if (!targetPath || !fsSync.existsSync(targetPath)) {
+    targetPath = null
+    for (const possibleName of possibleNames) {
+      const testPath = path.join(mainDirectory, possibleName)
+      if (fsSync.existsSync(testPath)) {
+        targetPath = testPath
+        break
+      }
+    }
+  }
+
+  // If not found in main directory, try modpack directories
+  if (!targetPath) {
+    try {
+      if (fsSync.existsSync(modpacksPath)) {
+        const modpackDirs = await fs.readdir(modpacksPath, { withFileTypes: true })
+        for (const dir of modpackDirs) {
+          if (!dir.isDirectory()) continue
+          const modpackPath = path.join(modpacksPath, dir.name)
+          for (const possibleName of possibleNames) {
+            const modpackAddonPath = path.join(modpackPath, type, possibleName)
+            if (fsSync.existsSync(modpackAddonPath)) {
+              targetPath = modpackAddonPath
+              break
+            }
+          }
+          if (targetPath) break
+        }
+      }
+    } catch (error) {
+      // Ignore errors when searching modpack directories
+    }
+  }
+
+  if (!targetPath) {
+    throw new Error(`Файл не найден: ${name}`)
+  }
+
   await fs.rm(targetPath, { recursive: true, force: true })
+}
+
+async function deleteModpackDirectory(modpackKey) {
+  const dirPath = path.join(modpacksPath, modpackKey)
+  const metaPath = path.join(modpacksPath, `${modpackKey}.meta.json`)
+
+  if (fsSync.existsSync(dirPath)) {
+    await fs.rm(dirPath, { recursive: true, force: true })
+    console.log(`Deleted modpack directory: ${dirPath}`)
+  }
+  if (fsSync.existsSync(metaPath)) {
+    await fs.unlink(metaPath)
+    console.log(`Deleted modpack meta: ${metaPath}`)
+  }
+
+  try {
+    const resolvedDirPath = path.resolve(dirPath)
+    const profiles = await getProfiles()
+    const filteredProfiles = profiles.filter((profile) => {
+      if (!profile?.modpackPath) return true
+      try {
+        return path.resolve(profile.modpackPath) !== resolvedDirPath
+      } catch {
+        return true
+      }
+    })
+
+    if (filteredProfiles.length !== profiles.length) {
+      await fs.writeFile(profilesPath, JSON.stringify(filteredProfiles, null, 2), 'utf-8')
+      console.log(`Deleted ${profiles.length - filteredProfiles.length} modpack profile(s) for ${modpackKey}`)
+    }
+  } catch (error) {
+    console.warn('Failed to prune modpack profiles:', error && error.message)
+  }
+
+  return true
 }
 
 async function runConcurrentTasks(items, worker, concurrency = 4) {
@@ -848,11 +1610,12 @@ async function deleteProfile(profileId) {
 }
 
 async function getSettings() {
-  return await readJson(settingsPath, { theme: 'dark', javaPath: 'java', ram: 'auto' })
+  const storedSettings = await readJson(settingsPath, defaultLauncherSettings)
+  return { ...defaultLauncherSettings, ...(storedSettings || {}) }
 }
 
 async function saveSettings(settings) {
-  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+  await fs.writeFile(settingsPath, JSON.stringify({ ...defaultLauncherSettings, ...(settings || {}) }, null, 2), 'utf-8')
 }
 
 async function getAuthState() {
@@ -956,26 +1719,177 @@ function testJava(candidate, minMajor = 17) {
   return major !== null && major >= minMajor
 }
 
-async function getRequiredJavaMajor(versionId) {
+function getClassFileMajorVersion(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 8) return null
+  if (buffer.readUInt32BE(0) !== 0xCAFEBABE) return null
+  return buffer.readUInt16BE(6)
+}
+
+function mapClassFileMajorToJavaMajor(classFileMajor) {
+  if (typeof classFileMajor !== 'number' || classFileMajor < 45) return null
+  return classFileMajor - 44
+}
+
+function getRequiredJavaMajorFromJar(jarPath, mainClass = 'net.minecraft.client.main.Main') {
   try {
-    const versionFile = path.join(versionsPath, versionId, `${versionId}.json`)
-    const data = await readJson(versionFile, null)
-    if (!data) return 17
-    if (data.javaVersion && typeof data.javaVersion.majorVersion === 'number') {
-      return data.javaVersion.majorVersion
-    }
-    if (data.javaVersion && typeof data.javaVersion.component === 'string') {
-      const match = data.javaVersion.component.match(/(\d+)/)
-      if (match) return parseInt(match[1], 10)
+    if (!jarPath || !fsSync.existsSync(jarPath)) return null
+    const zip = new AdmZip(jarPath)
+    const preferredEntries = Array.from(new Set([
+      typeof mainClass === 'string' && mainClass
+        ? `${mainClass.replace(/\./g, '/')}.class`
+        : null,
+      'net/minecraft/client/main/Main.class'
+    ].filter(Boolean)))
+
+    for (const entryName of preferredEntries) {
+      const entry = zip.getEntry(entryName)
+      if (!entry) continue
+      const classFileMajor = getClassFileMajorVersion(entry.getData())
+      const javaMajor = mapClassFileMajorToJavaMajor(classFileMajor)
+      if (javaMajor !== null) return javaMajor
     }
 
-    const parts = versionId.split('.').map((part) => parseInt(part, 10) || 0)
-    if ((parts[0] === 1 && parts[1] >= 21) || parts[0] > 1) {
-      return 21
+    const fallbackEntries = zip.getEntries()
+      .filter((entry) => !entry.isDirectory && entry.entryName.endsWith('.class'))
+      .slice(0, 200)
+    let detectedJavaMajor = null
+    for (const entry of fallbackEntries) {
+      const classFileMajor = getClassFileMajorVersion(entry.getData())
+      const javaMajor = mapClassFileMajorToJavaMajor(classFileMajor)
+      if (javaMajor === null) continue
+      detectedJavaMajor = detectedJavaMajor === null ? javaMajor : Math.max(detectedJavaMajor, javaMajor)
     }
-    return 17
-  } catch {
-    return 17
+    return detectedJavaMajor
+  } catch (error) {
+    console.warn(`Failed to inspect client jar for Java requirement (${jarPath}):`, error.message)
+    return null
+  }
+}
+
+function inferRequiredJavaMajorFromVersionData(data, versionId) {
+  let majorVersion = 17
+  if (data.javaVersion && typeof data.javaVersion.majorVersion === 'number') {
+    majorVersion = data.javaVersion.majorVersion
+  } else if (data.javaVersion && typeof data.javaVersion.component === 'string') {
+    const match = data.javaVersion.component.match(/(\d+)/)
+    if (match) majorVersion = parseInt(match[1], 10)
+  } else {
+    const parts = String(versionId || '').split('.').map((part) => parseInt(part, 10) || 0)
+    if ((parts[0] === 1 && parts[1] >= 21) || parts[0] > 1) {
+      majorVersion = 21
+    }
+  }
+  return majorVersion
+}
+
+function inferJavaCompatibilityRangeFromVersionId(versionId) {
+  const match = String(versionId || '').match(/^(\d+)\.(\d+)(?:\.(\d+))?/)
+  if (!match) {
+    return { minMajor: 17, maxMajor: null }
+  }
+
+  const major = parseInt(match[1], 10) || 0
+  const minor = parseInt(match[2], 10) || 0
+  const patch = parseInt(match[3] || '0', 10) || 0
+
+  if (major !== 1) {
+    return major > 1
+      ? { minMajor: 21, maxMajor: null }
+      : { minMajor: 17, maxMajor: null }
+  }
+
+  if (minor <= 16) {
+    return { minMajor: 8, maxMajor: 15 }
+  }
+  if (minor === 17) {
+    return { minMajor: 16, maxMajor: 16 }
+  }
+  if (minor < 20 || (minor === 20 && patch <= 4)) {
+    return { minMajor: 17, maxMajor: 20 }
+  }
+  return { minMajor: 21, maxMajor: null }
+}
+
+function formatJavaCompatibilityRange(range) {
+  if (!range || typeof range.minMajor !== 'number') return '17+'
+  if (typeof range.maxMajor === 'number') {
+    return range.minMajor === range.maxMajor
+      ? `${range.minMajor}`
+      : `${range.minMajor}-${range.maxMajor}`
+  }
+  return `${range.minMajor}+`
+}
+
+function mergeJavaCompatibilityRanges(primaryRange, fallbackRange) {
+  const normalizedPrimary = primaryRange || {}
+  const normalizedFallback = fallbackRange || {}
+  const minMajor = Math.max(
+    typeof normalizedPrimary.minMajor === 'number' ? normalizedPrimary.minMajor : 0,
+    typeof normalizedFallback.minMajor === 'number' ? normalizedFallback.minMajor : 0
+  )
+
+  const maxCandidates = [
+    normalizedPrimary.maxMajor,
+    normalizedFallback.maxMajor
+  ].filter((value) => typeof value === 'number')
+  const maxMajor = maxCandidates.length > 0 ? Math.min(...maxCandidates) : null
+
+  if (typeof maxMajor === 'number' && maxMajor < minMajor) {
+    return { minMajor, maxMajor: minMajor }
+  }
+
+  return { minMajor, maxMajor }
+}
+
+async function readInstalledVersionMetadata(versionId) {
+  const versionDir = path.join(versionsPath, versionId)
+  const candidates = [
+    path.join(versionDir, `${versionId}.json`),
+    path.join(versionDir, 'version.json')
+  ]
+
+  for (const versionFile of candidates) {
+    if (!fsSync.existsSync(versionFile)) continue
+    const data = await readJson(versionFile, null)
+    if (data && typeof data === 'object') {
+      return { data, versionFile }
+    }
+  }
+
+  return null
+}
+
+async function getJavaCompatibilityRange(versionId) {
+  try {
+    const fallbackRange = inferJavaCompatibilityRangeFromVersionId(versionId)
+    const metadata = await readInstalledVersionMetadata(versionId)
+    const versionData = metadata?.data || null
+    if (versionData) {
+      const requiredMajor = inferRequiredJavaMajorFromVersionData(versionData, versionId)
+      const range = mergeJavaCompatibilityRanges({ minMajor: requiredMajor, maxMajor: null }, fallbackRange)
+      console.log(`Detected required Java version: ${formatJavaCompatibilityRange(range)} (${metadata.versionFile})`)
+      return range
+    }
+
+    const versionDir = path.join(versionsPath, versionId)
+    const jarCandidates = [
+      path.join(versionDir, `${versionId}.jar`),
+      path.join(versionDir, 'client.jar')
+    ]
+    for (const jarPath of jarCandidates) {
+      const jarJavaMajor = getRequiredJavaMajorFromJar(jarPath)
+      if (jarJavaMajor !== null) {
+        const range = mergeJavaCompatibilityRanges({ minMajor: jarJavaMajor, maxMajor: null }, fallbackRange)
+        console.log(`Detected required Java version from jar: ${formatJavaCompatibilityRange(range)} (${jarPath})`)
+        return range
+      }
+    }
+
+    console.log(`Detected required Java version: ${formatJavaCompatibilityRange(fallbackRange)} (fallback by version id)`)
+    return fallbackRange
+  } catch (error) {
+    console.warn(`Failed to detect required Java version for ${versionId}:`, error.message)
+    return { minMajor: 17, maxMajor: null }
   }
 }
 
@@ -1002,7 +1916,7 @@ function parseMemory(value) {
 
 
 
-async function findJavaPath(preferredPath, minMajor = 17, event = null) {
+async function findJavaPath(preferredPath, minMajor = 17, maxMajor = null, event = null) {
   const candidates = []
   if (preferredPath) {
     candidates.push(preferredPath)
@@ -1074,40 +1988,51 @@ async function findJavaPath(preferredPath, minMajor = 17, event = null) {
       if (!candidate || (candidate !== 'java' && !isExecutable(candidate))) return null
       const major = getJavaVersionMajor(candidate)
       if (major === null || major < minMajor) return null
+      if (typeof maxMajor === 'number' && major > maxMajor) return null
       return { candidate, major }
     })
     .filter(Boolean)
 
   if (matches.length === 0) {
-    console.log(`Java ${minMajor}+ not found, downloading...`)
+    const requestedRange = formatJavaCompatibilityRange({ minMajor, maxMajor })
+    console.log(`Java ${requestedRange} not found, downloading Java ${minMajor}...`)
     try {
       const downloadedPath = await downloadAndInstallJava(minMajor, event)
       return downloadedPath
     } catch (error) {
-      throw new Error(`Java ${minMajor}+ не найдена и не удалось скачать: ${error.message}`)
+      throw new Error(`Java ${requestedRange} не найдена и не удалось скачать Java ${minMajor}: ${error.message}`)
     }
   }
 
+  // Select the lowest Java that fits the compatibility range.
   matches.sort((a, b) => a.major - b.major)
-  if (matches[0].major > minMajor + 2) {
-    console.log(`Available Java ${matches[0].major} is too new, downloading ${minMajor}...`)
+  const selected = matches.find((m) => m.major >= minMajor && (typeof maxMajor !== 'number' || m.major <= maxMajor))
+  if (!selected) {
+    const requestedRange = formatJavaCompatibilityRange({ minMajor, maxMajor })
+    console.log(`Java ${requestedRange} not found in matches, downloading Java ${minMajor}...`)
     try {
       const downloadedPath = await downloadAndInstallJava(minMajor, event)
       return downloadedPath
     } catch (error) {
-      console.warn(`Failed to download Java ${minMajor}, using ${matches[0].major}: ${error.message}`)
-      // Fall back to the available version
+      throw new Error(`Java ${requestedRange} не найдена и не удалось скачать Java ${minMajor}: ${error.message}`)
     }
   }
-  return matches[0].candidate
+  console.log(`Using Java ${selected.major} (${selected.candidate}) for range ${formatJavaCompatibilityRange({ minMajor, maxMajor })}`)
+  return selected.candidate
 }
 
 async function launchGame(profile, event) {
-  const requiredJavaMajor = await getRequiredJavaMajor(profile.versionId)
-  event?.sender.send('launcher:launchProgress', { message: `Требуемая Java: ${requiredJavaMajor}+` })
-  const javaPath = await findJavaPath(profile.javaPath || '', requiredJavaMajor, event)
+  const javaCompatibilityRange = await getJavaCompatibilityRange(profile.versionId)
+  event?.sender.send('launcher:launchProgress', { message: `Требуемая Java: ${formatJavaCompatibilityRange(javaCompatibilityRange)}` })
+  const javaPath = await findJavaPath(
+    profile.javaPath || '',
+    javaCompatibilityRange.minMajor,
+    javaCompatibilityRange.maxMajor,
+    event
+  )
   const launcher = new Client()
   const root = path.join(userData, 'minecraft')
+  const launcherSettings = await getSettings()
   const authState = await readJson(authPath, {})
 
   const profileName = profile.username || authState.name || 'KuroPlayer'
@@ -1128,11 +2053,8 @@ async function launchGame(profile, event) {
     }
   }
 
-  const isOnlineProfile = !profile.offline && authState.access_token && authState.client_token
-
-  const useOfflineAuth = Boolean(profile.offline)
-
-  if (isOnlineProfile && !useOfflineAuth) {
+  const isOnlineProfile = authState.access_token && authState.client_token
+  if (isOnlineProfile) {
     authorization = {
       username: profileName,
       name: profileName,
@@ -1146,14 +2068,29 @@ async function launchGame(profile, event) {
       }
     }
   } else {
-    isOfflineFallback = true
-    authorization = await Authenticator.getAuth(profileName, undefined)
-    authorization.uuid = profile.uuid || authorization.uuid
-    authorization.meta = {
-      type: 'msa',
-      demo: false,
-      xuid: '0'
+    // No valid online auth present — fall back to an offline session so the
+    // user can still launch the game without signing in. This preserves the
+    // previous behavior where offline launches are allowed implicitly.
+    const makeOfflineUUID = (name) => {
+      const h = crypto.createHash('md5').update('OfflinePlayer:' + (name || '')).digest('hex')
+      return `${h.substring(0,8)}-${h.substring(8,12)}-${h.substring(12,16)}-${h.substring(16,20)}-${h.substring(20,32)}`
     }
+
+    const offlineUuid = profile.uuid || authState.uuid || makeOfflineUUID(profileName)
+    authorization = {
+      username: profileName,
+      name: profileName,
+      uuid: offlineUuid,
+      access_token: '0',
+      client_token: '0',
+      user_properties: normalizeUserProperties(authState.user_properties),
+      meta: {
+        ...(authState.meta || { type: 'mojang' }),
+        demo: false,
+        offline: true
+      }
+    }
+    isOfflineFallback = true
   }
 
   // If user provided a custom skin for this profile, attach it to the session
@@ -1168,18 +2105,32 @@ async function launchGame(profile, event) {
     }
 
     if (profile && profile.skin) {
-      // Prefer explicit URL from profile.skin, otherwise use local skin server
-      let skinUrl = profile.skin.url || (skinServerPort ? `http://127.0.0.1:${skinServerPort}/skins/${profile.id}.png` : null)
+      const localSkinPath = path.join(userData, 'skins', `${profile.id}.png`)
+      const hasLocalSkin = fsSync.existsSync(localSkinPath)
+      let skinUrl = null
+
+      if (hasLocalSkin && skinServerPort) {
+        skinUrl = `http://127.0.0.1:${skinServerPort}/skins/${profile.id}.png`
+      } else if (profile.skin.url) {
+        skinUrl = profile.skin.url
+      }
+
       if (skinUrl) {
+        console.log('Using custom skin URL for profile', profile.id, skinUrl)
         const texturesObj = {
           timestamp: Date.now(),
           profileId: authorization.uuid,
           profileName: authorization.name || profileName,
           textures: {
-            SKIN: { url: skinUrl }
+            SKIN: {
+              url: skinUrl,
+              metadata: profile.skin.model === 'slim' ? { model: 'slim' } : undefined
+            }
           }
         }
-        userProps.textures = Buffer.from(JSON.stringify(texturesObj)).toString('base64')
+        const encoded = Buffer.from(JSON.stringify(texturesObj)).toString('base64')
+        // Store as array to match authenticator.parsePropts output (arrays of values)
+        userProps.textures = [encoded]
       }
     }
 
@@ -1512,9 +2463,22 @@ async function launchGame(profile, event) {
 
   // For mod loaders, always use loader version directory if available
   const usesModLoader = profile.loader === 'forge' || profile.loader === 'quilt' || profile.loader === 'fabric' || profile.loader === 'neoforge'
+  console.log(`[Launch] usesModLoader=${usesModLoader}, profile.loader=${profile.loader}, installedLoaderId=${installedLoaderId}`)
   const versionDirectory = (installedLoaderId && usesModLoader) 
     ? path.join(versionsPath, installedLoaderId) 
     : path.join(versionsPath, profile.versionId)
+  console.log(`[Launch] versionDirectory=${versionDirectory}`)
+  
+  // Check if loader version directory exists
+  if (installedLoaderId) {
+    const loaderDirExists = fsSync.existsSync(path.join(versionsPath, installedLoaderId))
+    console.log(`[Launch] Loader directory exists: ${loaderDirExists}`)
+    if (!loaderDirExists) {
+      console.log(`[Launch] WARNING: Loader directory does not exist! Falling back to base version.`)
+      installedLoaderId = null
+    }
+  }
+  
   const versionJsonOverride = (installedLoaderId && usesModLoader) ? null : baseVersionJsonPath
   const baseJar = path.join(versionsPath, profile.versionId, `${profile.versionId}.jar`)
   
@@ -1529,7 +2493,6 @@ async function launchGame(profile, event) {
   const options = {
     clientPackage: null,
     authorization,
-    root,
     version: versionOption,
     memory: {
       max: safeRam,
@@ -1542,6 +2505,18 @@ async function launchGame(profile, event) {
       ...(versionJsonOverride ? { versionJson: versionJsonOverride } : {})
     }
   }
+  
+  // Use modpack-specific directory for gameDir if this is a modpack profile
+  if (profile.modpackPath) {
+    const modpackGameDir = profile.modpackPath
+    console.log(`[Launch] Using main minecraft root for libraries: ${root}`)
+    console.log(`[Launch] Using modpack game directory: ${modpackGameDir}`)
+    options.root = root  // Keep main minecraft for libraries/versions
+    // Use overrides to set game directory - this sets --gameDir in launch args
+    options.overrides.gameDirectory = modpackGameDir
+  } else {
+    options.root = root
+  }
 
   options.customArgs = options.customArgs || []
   // Remove any existing -Xmx/-Xms to avoid duplicates/conflicts
@@ -1553,7 +2528,23 @@ async function launchGame(profile, event) {
   if (!options.customArgs.some(a => typeof a === 'string' && a.startsWith('-XX:ReservedCodeCacheSize'))) options.customArgs.push('-XX:ReservedCodeCacheSize=256M')
   if (!options.customArgs.some(a => typeof a === 'string' && a.startsWith('-XX:MaxMetaspaceSize'))) options.customArgs.push('-XX:MaxMetaspaceSize=512M')
 
+  // If we have user_properties for custom skin injection, pass it as game launch args, not JVM args.
+  if (authorization && authorization.user_properties && authorization.user_properties !== '{}') {
+    options.customLaunchArgs = options.customLaunchArgs || []
+    if (!options.customLaunchArgs.some(a => a === '--userProperties')) {
+      options.customLaunchArgs.push('--userProperties', authorization.user_properties)
+    }
+  }
+
+  if (launcherSettings.fullscreen) {
+    options.customLaunchArgs = options.customLaunchArgs || []
+    if (!options.customLaunchArgs.some((arg) => arg === '--fullscreen')) {
+      options.customLaunchArgs.push('--fullscreen')
+    }
+  }
+
   console.log('RAM debug:', { safeRam, memory: options.memory, customArgs: options.customArgs.filter(a => typeof a === 'string' && a.startsWith('-Xm')) })
+  console.log('customLaunchArgs:', options.customLaunchArgs)
 
   if (installedForgeInstallerJar) options.forge = installedForgeInstallerJar
 
@@ -1620,10 +2611,6 @@ async function launchGame(profile, event) {
     console.log('Mod loader address space fix applied')
   }
 
-  if (!profile.offline && isOfflineFallback) {
-    event?.sender.send('launcher:launchProgress', { message: 'Нет действительной лицензионной сессии, запуск в оффлайн-режиме' })
-  }
-
   const requestedGB = profile.ram === 'auto' ? -1 : parseMemoryGB(profile.ram)
   if (parseMemoryGB(safeRam) < (requestedGB > 0 ? requestedGB : 999)) {
     event?.sender.send('launcher:launchProgress', { message: `Память скорректирована до ${safeRam}` })
@@ -1685,6 +2672,17 @@ async function launchGame(profile, event) {
       forge: options.forge,
       javaPath: options.javaPath
     })
+    try {
+      console.log('authorization preview:', {
+        uuid: authorization && authorization.uuid,
+        name: authorization && authorization.name,
+        user_properties_preview: authorization && (typeof authorization.user_properties === 'string'
+          ? authorization.user_properties.slice(0, 200)
+          : JSON.stringify(authorization.user_properties).slice(0, 200))
+      })
+    } catch (e) {
+      // ignore logging errors
+    }
     const child = await launcher.launch(options)
     if (!child) {
       throw new Error('Не удалось запустить Minecraft. Проверьте Java и версию.')
@@ -1786,7 +2784,7 @@ async function createWindow() {
   win.on('unmaximize', () => win.webContents.send('window:maximize-change', false))
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Initialize paths now that app is ready
   userData = path.join(app.getPath('userData'), 'kuro')
   minecraftPath = path.join(userData, 'minecraft')
@@ -1800,9 +2798,9 @@ app.whenReady().then(() => {
   modpacksPath = path.join(userData, 'modpacks')
   modrinthCachePath = path.join(userData, 'modrinth_cache.json')
 
-  // Initialize storage and create window
+  // Initialize storage and skin server before creating window
   ensureStorage()
-  startSkinServer()
+  await startSkinServer()
   createWindow()
 })
 
@@ -1917,6 +2915,11 @@ ipcMain.handle('launcher:registerUser', async (event, email, password) => {
   return await registerUser(email, password)
 })
 
+ipcMain.handle('launcher:logoutUser', async () => {
+  await fs.writeFile(authPath, JSON.stringify({ email: '', loggedIn: false }, null, 2), 'utf-8')
+  return true
+})
+
 ipcMain.handle('launcher:launchProfile', async (event, profileId) => {
   const profiles = await getProfiles()
   const profile = profiles.find((item) => item.id === profileId)
@@ -1954,12 +2957,21 @@ ipcMain.handle('launcher:getInstalledModrinthAddons', async () => {
   return await getInstalledModrinthAddons()
 })
 
-ipcMain.handle('launcher:toggleInstalledAddon', async (event, type, name, enabled) => {
-  return await toggleInstalledAddon(type, name, enabled)
+ipcMain.handle('launcher:toggleInstalledAddon', async (event, type, name, enabled, addonPath) => {
+  return await toggleInstalledAddon(type, name, enabled, addonPath)
 })
 
-ipcMain.handle('launcher:deleteInstalledAddon', async (event, type, name) => {
-  return await deleteInstalledAddon(type, name)
+ipcMain.handle('launcher:deleteInstalledAddon', async (event, type, name, addonPath) => {
+  return await deleteInstalledAddon(type, name, addonPath)
+})
+
+ipcMain.handle('launcher:deleteModpackDirectory', async (event, modpackKey) => {
+  try {
+    return await deleteModpackDirectory(modpackKey)
+  } catch (e) {
+    console.error('Failed to delete modpack directory:', e && e.message)
+    throw e
+  }
 })
 
 // Window control handlers (used by custom titlebar)

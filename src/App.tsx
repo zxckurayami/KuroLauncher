@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
+const logoIcon = new URL('../logo/KuroLauncher.png', import.meta.url).href
 
 type VersionItem = {
   id: string
@@ -20,9 +21,9 @@ type Profile = {
   ram: string
   javaPath: string
   username: string
-  offline: boolean
   loader: 'vanilla' | 'forge' | 'fabric' | 'quilt' | 'neoforge'
   loaderVersion?: string
+  modpackPath?: string
   skin?: {
     url?: string
     model?: 'classic' | 'slim'
@@ -34,6 +35,7 @@ type Settings = {
   javaPath: string
   ram: string
   accent?: 'red' | 'violet' | 'white'
+  fullscreen: boolean
 }
 
 type AuthState = {
@@ -133,7 +135,6 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
     ram: 'auto',
     javaPath: settings.javaPath,
     username: '',
-    offline: true,
     loader: 'vanilla' as 'vanilla' | 'forge' | 'fabric' | 'quilt' | 'neoforge',
     loaderVersion: ''
   })
@@ -146,7 +147,6 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
       ram: 'auto',
       javaPath: settings.javaPath,
       username: '',
-      offline: true,
       loader: 'vanilla',
       loaderVersion: ''
     })
@@ -218,16 +218,43 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
       {formData.loader !== 'vanilla' && (
         <div className="form-group">
           <label className="form-label">Версия загрузчика</label>
-          <CustomSelect
-            options={
-              loaderVersionLoading
-                ? [{ value: '', label: 'Загрузка...' }]
-                : [{ value: '', label: 'Выберите версию' }, ...availableLoaderVersions]
+          {(() => {
+            const mcParts = formData.versionId.split('.')
+            const mcMajor = parseInt(mcParts[1] || '0', 10)
+            const mcMinor = parseInt(mcParts[2] || '0', 10)
+            const neoforgeUnsupported = formData.loader === 'neoforge' && formData.versionId &&
+              (mcMajor < 20 || (mcMajor === 20 && mcMinor < 1))
+
+            if (neoforgeUnsupported) {
+              return (
+                <div className="loader-version-warning warning">
+                  <span className="warning-icon">⚠</span>
+                  Доступно только для MC 1.20.1 и новее
+                </div>
+              )
             }
-            value={formData.loaderVersion || ''}
-            onChange={(val: string) => updateFormData({ loaderVersion: val })}
-            placeholder={loaderVersionLoading ? 'Загрузка...' : 'Выберите версию' }
-          />
+
+            if (!loaderVersionLoading && formData.versionId && availableLoaderVersions.length === 0) {
+              return (
+                <div className="loader-version-warning">
+                  Версии не найдены для выбранной MC версии
+                </div>
+              )
+            }
+
+            return (
+              <CustomSelect
+                options={
+                  loaderVersionLoading
+                    ? [{ value: '', label: 'Загрузка...' }]
+                    : [{ value: '', label: 'Выберите версию' }, ...availableLoaderVersions]
+                }
+                value={formData.loaderVersion || ''}
+                onChange={(val: string) => updateFormData({ loaderVersion: val })}
+                placeholder={loaderVersionLoading ? 'Загрузка...' : 'Выберите версию'}
+              />
+            )
+          })()}
         </div>
       )}
       <div className="form-group">
@@ -257,14 +284,6 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
           placeholder="Ваш никнейм"
         />
       </div>
-      <label className="checkbox-row">
-        <span>Оффлайн режим</span>
-        <input
-          type="checkbox"
-          checked={formData.offline}
-          onChange={(e) => updateFormData({ offline: e.target.checked })}
-        />
-      </label>
       <button className="btn btn-primary" onClick={handleSubmit}>Сохранить профиль</button>
     </div>
   )
@@ -281,11 +300,19 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
     { value: '16G', label: '16 GB' }
   ]
 
+  const getSystemTheme = (): 'dark' | 'light' => {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    }
+    return 'dark'
+  }
+
   const defaultSettings: Settings = {
-    theme: 'dark',
+    theme: getSystemTheme(),
     javaPath: 'java',
     ram: 'auto',
-    accent: 'red'
+    accent: 'red',
+    fullscreen: false
   }
 
 const newsItems = [
@@ -294,8 +321,8 @@ const newsItems = [
     body: 'Стартовая версия лаунчера с загрузкой версий, профилями и атмосферным интерфейсом.'
   },
   {
-    title: 'Новое: оффлайн-режим',
-    body: 'Создавайте локальные профили без обязательной авторизации и играйте в режиме оффлайн.'
+    title: 'Локальные профили и скины',
+    body: 'Быстрая загрузка профилей и локальных скинов без лишних задержек — играйте на своих условиях.'
   },
   {
     title: 'Современный UI',
@@ -336,6 +363,8 @@ function App() {
   const [modrinthTotalHits, setModrinthTotalHits] = useState(0)
   const [modrinthLoading, setModrinthLoading] = useState(false)
   const [modrinthInstalledAddons, setModrinthInstalledAddons] = useState<any[]>([])
+  const [expandedModpacks, setExpandedModpacks] = useState<Set<string>>(new Set())
+  const [standaloneExpanded, setStandaloneExpanded] = useState(true)
   const [skinFile, setSkinFile] = useState<File | null>(null)
   const [skinDataUrl, setSkinDataUrl] = useState<string | null>(null)
   const [skinModel, setSkinModel] = useState<'classic' | 'slim'>('classic')
@@ -346,6 +375,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const skinViewerContainerRef = useRef<HTMLDivElement | null>(null)
   const viewerRef = useRef<any>(null)
+  const viewerIdRef = useRef<number>(0)
 
   // Custom confirm dialog - doesn't steal focus like window.confirm
   const showConfirm = (message: string): Promise<boolean> => {
@@ -374,6 +404,13 @@ function App() {
 
   const activeProfile = useMemo(() => profiles.find((profile) => profile.id === selectedProfile), [profiles, selectedProfile])
 
+  const userInitials = useMemo(() => {
+    const source = auth.loggedIn ? auth.email : 'Гость'
+    const normalized = source.replace(/@.*$/, '').split(/[^a-zA-Z0-9а-яА-Я]+/).filter(Boolean)
+    const initials = normalized.slice(0, 2).map((part) => part[0].toUpperCase()).join('')
+    return initials ? initials.slice(0, 2) : 'GU'
+  }, [auth])
+
   useEffect(() => {
     async function syncProfileSkin() {
       setSkinFile(null)
@@ -385,15 +422,21 @@ function App() {
       }
 
       setSkinModel(activeProfile.skin?.model === 'slim' ? 'slim' : 'classic')
-      const defaultUrl = activeProfile.skin?.url || defaultSteveSkinUrl
-      setProfileSkinUrl(defaultUrl)
-
-      if (!activeProfile.skin?.url) {
-        try {
-          const url = await (window as any).launcher.getSkinUrl(activeProfile.id)
-          setProfileSkinUrl(url || defaultUrl)
-        } catch (e) {
-          setProfileSkinUrl(defaultUrl)
+      
+      try {
+        const url = await (window as any).launcher.getSkinUrl(activeProfile.id)
+        if (url) {
+          setProfileSkinUrl(url)
+        } else if (activeProfile.skin?.url) {
+          setProfileSkinUrl(activeProfile.skin.url)
+        } else {
+          setProfileSkinUrl(defaultSteveSkinUrl)
+        }
+      } catch (e) {
+        if (activeProfile.skin?.url) {
+          setProfileSkinUrl(activeProfile.skin.url)
+        } else {
+          setProfileSkinUrl(defaultSteveSkinUrl)
         }
       }
     }
@@ -415,23 +458,13 @@ function App() {
     }
   }, [userMenuOpen])
 
-  // Initialize dynamic 3D viewer (skinview3d) if available; fallback to 2D image
   useEffect(() => {
-    let mounted = true
-    async function initViewer() {
+    const currentId = ++viewerIdRef.current
+
+    if (activeTab === 'Skins' && skinViewerContainerRef.current) {
       const container = skinViewerContainerRef.current
-      if (!container) return
       const skinUrl = skinDataUrl || profileSkinUrl || defaultSteveSkinUrl
-
-      const destroyViewer = () => {
-        try {
-          if (viewerRef.current && typeof viewerRef.current.destroy === 'function') viewerRef.current.destroy()
-          if (viewerRef.current && viewerRef.current.controls && typeof viewerRef.current.controls.dispose === 'function') viewerRef.current.controls.dispose()
-        } catch {}
-        viewerRef.current = null
-      }
-
-      destroyViewer()
+      
       container.innerHTML = ''
 
       if (!skinUrl) {
@@ -442,59 +475,79 @@ function App() {
         return
       }
 
-      try {
-        const mod: any = await import('skinview3d')
-        const SkinViewer = mod.SkinViewer || mod.default?.SkinViewer || mod.default
-        const createOrbitControls = mod.createOrbitControls || mod.default?.createOrbitControls
-        if (!SkinViewer) throw new Error('SkinViewer not found')
+      const initViewer = async () => {
+        if (currentId !== viewerIdRef.current) return
+        try {
+          const mod: any = await import('skinview3d')
+          const SkinViewer = mod.SkinViewer || mod.default?.SkinViewer || mod.default
+          const createOrbitControls = mod.createOrbitControls || mod.default?.createOrbitControls
+          if (!SkinViewer) throw new Error('SkinViewer not found')
 
-        const viewer = new SkinViewer({
-          domElement: container,
-          width: 176,
-          height: 352,
-          skinUrl,
-          detectModel: false
-        })
-        viewerRef.current = viewer
+          if (currentId !== viewerIdRef.current) return
 
-        if (createOrbitControls) {
-          try {
-            viewerRef.current.controls = createOrbitControls(viewer)
-          } catch {}
+          const viewer = new SkinViewer({
+            domElement: container,
+            width: 176,
+            height: 352,
+            skinUrl,
+            model: skinModel === 'slim' ? 'slim' : 'classic',
+            detectModel: false,
+            background: settings.theme === 'light' ? 0xf0f0f0 : 0x1a1a1a
+          })
+          
+          if (currentId !== viewerIdRef.current) {
+            viewer.destroy()
+            return
+          }
+          
+          viewerRef.current = viewer
+
+          if (createOrbitControls) {
+            try {
+              viewerRef.current.controls = createOrbitControls(viewer)
+            } catch {}
+          }
+
+          const applySlim = () => {
+            try {
+              if (viewer.playerObject && viewer.playerObject.skin) {
+                viewer.playerObject.skin.slim = skinModel === 'slim'
+              }
+            } catch {}
+          }
+
+          applySlim()
+          setTimeout(() => {
+            if (currentId === viewerIdRef.current) applySlim()
+          }, 100)
+        } catch (e) {
+          if (currentId !== viewerIdRef.current) return
+          const img = document.createElement('img')
+          img.src = skinDataUrl || profileSkinUrl || defaultSteveSkinUrl
+          img.style.width = '160px'
+          img.style.height = '320px'
+          img.style.objectFit = 'cover'
+          img.style.imageRendering = 'pixelated'
+          container.appendChild(img)
         }
-
-        const applySlim = () => {
-          try {
-            if (viewer.playerObject && viewer.playerObject.skin) {
-              viewer.playerObject.skin.slim = skinModel === 'slim'
-            }
-          } catch {}
-        }
-
-        applySlim()
-        setTimeout(applySlim, 100)
-      } catch (e) {
-        const img = document.createElement('img')
-        img.src = skinDataUrl || profileSkinUrl || ''
-        img.style.width = '160px'
-        img.style.height = '320px'
-        img.style.objectFit = 'cover'
-        img.style.imageRendering = 'pixelated'
-        container.appendChild(img)
       }
-    }
 
-    initViewer()
+      initViewer()
+    }
 
     return () => {
-      mounted = false
-      try {
-        if (viewerRef.current && typeof viewerRef.current.destroy === 'function') viewerRef.current.destroy()
-        if (viewerRef.current && viewerRef.current.controls && typeof viewerRef.current.controls.dispose === 'function') viewerRef.current.controls.dispose()
-      } catch {}
-      viewerRef.current = null
+      if (currentId === viewerIdRef.current) {
+        if (skinViewerContainerRef.current) {
+          skinViewerContainerRef.current.innerHTML = ''
+        }
+        try {
+          if (viewerRef.current && typeof viewerRef.current.destroy === 'function') viewerRef.current.destroy()
+          if (viewerRef.current && viewerRef.current.controls && typeof viewerRef.current.controls.dispose === 'function') viewerRef.current.controls.dispose()
+        } catch {}
+        viewerRef.current = null
+      }
     }
-  }, [skinDataUrl, profileSkinUrl, skinModel])
+  }, [activeTab, skinModel, skinDataUrl, profileSkinUrl, defaultSteveSkinUrl])
 
   // Pagination logic with filtering and search
   const filteredVersions = versions.filter(v => {
@@ -550,7 +603,7 @@ function App() {
     const updatedProfiles = storedProfiles.map(p => ({ ...p, loader: p.loader || 'vanilla', loaderVersion: p.loaderVersion || '' }))
     setProfiles(updatedProfiles)
     const storedSettings = await window.launcher.getSettings()
-    setSettings(storedSettings)
+    setSettings({ ...defaultSettings, ...storedSettings })
     const authState = await window.launcher.getAuthState()
     setAuth(authState)
   }
@@ -589,7 +642,7 @@ function App() {
   useEffect(() => {
     loadMeta()
     loadState()
-    loadModrinthState()
+    loadInstalledAddons()
   }, [])
 
 
@@ -634,12 +687,17 @@ function App() {
     setIsBusy(true)
     setStatus('Установка Modrinth проекта...')
     try {
-      await window.launcher.installModrinthProject(projectId, {
+      const result = await window.launcher.installModrinthProject(projectId, {
         gameVersion: modrinthSearchVersion || undefined,
         loader: modrinthSearchLoader || undefined
       })
-      setStatus('Проект установлен. Проверьте папку mods.')
-      await loadModrinthState()
+      if (result?.profile) {
+        setStatus(`Модпак установлен. Профиль "${result.profile.name}" создан.`)
+        await loadState()
+      } else {
+        setStatus('Проект установлен. Проверьте папку mods.')
+      }
+      await loadInstalledAddons()
     } catch (error: any) {
       console.error('Modrinth install error', error)
       setStatus(`Ошибка установки Modrinth: ${error?.message || 'проверьте лог'}`)
@@ -651,8 +709,93 @@ function App() {
   useEffect(() => {
     if (activeTab === 'Mods') {
       searchModrinth(1)
+      loadInstalledAddons()
     }
   }, [activeTab, modrinthSearchType, modrinthSearchLoader, modrinthSearchVersion])
+
+  async function loadInstalledAddons() {
+    try {
+      const addons = await window.launcher.getInstalledModrinthAddons()
+      setModrinthInstalledAddons(addons)
+    } catch (error) {
+      console.error('Failed to load installed addons:', error)
+    }
+  }
+
+  function toggleModpackExpansion(modpackId: string) {
+    const newExpanded = new Set(expandedModpacks)
+    if (newExpanded.has(modpackId)) {
+      newExpanded.delete(modpackId)
+    } else {
+      newExpanded.add(modpackId)
+    }
+    setExpandedModpacks(newExpanded)
+  }
+
+  const organizedAddons = useMemo(() => {
+    const modpacks: { [key: string]: any[] } = {}
+    const standalone: any[] = []
+
+    modrinthInstalledAddons.forEach(addon => {
+      if (addon.origin?.modpackId) {
+        const key = `${addon.origin.modpackId}-${addon.origin.modpackVersion || 'latest'}`
+        if (!modpacks[key]) {
+          modpacks[key] = []
+        }
+        modpacks[key].push(addon)
+      } else {
+        standalone.push(addon)
+      }
+    })
+
+    return { modpacks, standalone }
+  }, [modrinthInstalledAddons])
+
+  async function deleteModpack(modpackKey: string, modpackTitle: string) {
+    if (await showConfirm(`Удалить модпак "${modpackTitle}" и все его дополнения?`)) {
+      try {
+        await window.launcher.deleteModpackDirectory(modpackKey)
+        await loadInstalledAddons()
+        await loadState()
+      } catch (error) {
+        console.error('Failed to delete modpack:', error)
+      }
+    }
+  }
+
+  async function deleteAllStandalone() {
+    if (await showConfirm('Удалить все отдельные дополнения?')) {
+      try {
+        // Delete all standalone addons
+        for (const addon of organizedAddons.standalone) {
+          await window.launcher.deleteInstalledAddon(addon.type, addon.name, addon.path)
+        }
+        await loadInstalledAddons() // Reload to get updated state
+      } catch (error) {
+        console.error('Failed to delete standalone addons:', error)
+      }
+    }
+  }
+
+  async function toggleAddon(addon: any) {
+    try {
+      await window.launcher.toggleInstalledAddon(addon.type, addon.name, !addon.enabled, addon.path)
+      await loadInstalledAddons() // Reload to get updated state
+    } catch (error) {
+      console.error('Failed to toggle addon:', error)
+    }
+  }
+
+  async function deleteAddon(addon: any) {
+    if (await showConfirm(`Удалить ${addon.name}?`)) {
+      try {
+        await window.launcher.deleteInstalledAddon(addon.type, addon.name, addon.path)
+        await loadInstalledAddons() // Reload to get updated state
+      } catch (error) {
+        console.error('Failed to delete addon:', error)
+      }
+    }
+  }
 
   useEffect(() => {
     if (activeTab === 'Versions') {
@@ -790,6 +933,12 @@ function App() {
     setStatus(result.message)
   }
 
+  async function handleLogout() {
+    await window.launcher.logoutUser()
+    setAuth({ email: '', loggedIn: false })
+    setStatus('Вы вышли из аккаунта')
+  }
+
   async function handleSaveSettings() {
     await window.launcher.saveSettings(settings)
     setStatus('Настройки сохранены')
@@ -808,6 +957,15 @@ function App() {
       try { document.body.classList.remove(themeClass) } catch (e) {}
     }
   }, [themeClass, accentColor])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleChange = (e: MediaQueryListEvent) => {
+      setSettings(s => ({ ...s, theme: e.matches ? 'dark' : 'light' }))
+    }
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [])
 
   return (
     <div className="app-shell">
@@ -843,9 +1001,10 @@ function App() {
         </div>
       </div>
 
-      <div className="header">
+      <div className="header glass-panel">
         <div className="header-left">
           <div className="header-logo">
+            <img src={logoIcon} alt="KuroLauncher" className="header-logo-icon" />
             <div className="header-logo-text">KuroLauncher</div>
           </div>
           <div className={`header-status ${isBusy ? 'loading' : ''}`}>
@@ -854,7 +1013,31 @@ function App() {
           </div>
         </div>
         <div className="header-right">
-          <div className="email-badge">{auth.loggedIn ? auth.email : 'Offline'}</div>
+          <div className="user-section">
+            <button className="user-avatar" onClick={() => setUserMenuOpen((prev) => !prev)}>{userInitials}</button>
+            <div className="user-info">
+              <div className="user-name">{auth.loggedIn ? 'Пользователь' : 'Гость'}</div>
+              <div className="user-email">{auth.loggedIn ? auth.email : 'Не вошёл в систему'}</div>
+            </div>
+            <div className={`user-dropdown ${userMenuOpen ? 'open' : ''}`}>
+              {auth.loggedIn ? (
+                <>
+                  <button className="outline-button" onClick={() => { setUserMenuOpen(false); setActiveTab('Settings') }}>Профиль</button>
+                  <button className="outline-button" onClick={() => { handleLogout(); setUserMenuOpen(false) }}>Выйти</button>
+                </>
+              ) : (
+                <button
+                  className="outline-button"
+                  onClick={() => {
+                    setUserMenuOpen(false)
+                    setActiveTab('Settings')
+                  }}
+                >
+                  Войти
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1175,7 +1358,7 @@ function App() {
         )}
 
         {activeTab === 'Profiles' && (
-          <section className="profiles-grid">
+          <section className="profiles-grid scrollable-content">
             <div className="panel panel small">
               <div className="panel-title">Профили</div>
               <div className="profiles-list">
@@ -1187,7 +1370,7 @@ function App() {
                         {profile.versionId}
                         {profile.loader !== 'vanilla' ? ` • ${profile.loader.charAt(0).toUpperCase() + profile.loader.slice(1)}` : ''}
                         {profile.loaderVersion ? ` ${profile.loaderVersion}` : ''}
-                        {' • '}{profile.ram === 'auto' ? 'Авто' : profile.ram} • {profile.offline ? 'Offline' : 'Online'}
+                        {' • '}{profile.ram === 'auto' ? 'Авто' : profile.ram}
                       </div>
                     </div>
                     <div className="profile-buttons">
@@ -1316,27 +1499,155 @@ function App() {
               <div className="panel-title">Установленные дополнения</div>
               <div className="installed-list">
                 {modrinthInstalledAddons.length === 0 && <div className="hint">Пока нет установленных модов/шейдеров/ресурсов.</div>}
-                {modrinthInstalledAddons.map((addon) => (
-                  <div key={addon.id} className="installed-item">
-                    <span>{addon.name}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <button className="outline-button" onClick={async () => {
-                        await window.launcher.toggleInstalledAddon(addon.type, addon.name, !addon.enabled)
-                        await loadModrinthState()
-                      }}>
-                        {addon.enabled ? 'Отключить' : 'Включить'}
-                      </button>
-                      <button className="outline-button delete-button" onClick={async () => {
-                        const confirmed = await showConfirm(`Удалить ${addon.name}?`)
-                        if (!confirmed) return
-                        await window.launcher.deleteInstalledAddon(addon.type, addon.name)
-                        await loadModrinthState()
-                      }}>
-                        Удалить
-                      </button>
+
+                {/* Standalone addons (not from modpacks) */}
+                {organizedAddons.standalone.length > 0 && (
+                  <div className="modpack-section">
+                    <div className="modpack-header" onClick={() => setStandaloneExpanded(!standaloneExpanded)} style={{ cursor: 'pointer' }}>
+                      <div className="modpack-title">
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          xmlns="http://www.w3.org/2000/svg"
+                          style={{
+                            marginRight: 8,
+                            transform: standaloneExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                            transition: 'transform 0.2s'
+                          }}
+                        >
+                          <path d="M9 18l6-6-6-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ marginRight: 8 }}>
+                          <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2Z" stroke="currentColor" strokeWidth="1.6"/>
+                          <path d="m8 5 4-3 4 3" stroke="currentColor" strokeWidth="1.6"/>
+                        </svg>
+                        Отдельные дополнения
+                        <span style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>
+                          {organizedAddons.standalone.length} дополнений
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <button
+                          className="outline-button delete-button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            deleteAllStandalone()
+                          }}
+                          style={{ fontSize: 12, padding: '4px 8px' }}
+                        >
+                          Удалить все
+                        </button>
+                      </div>
                     </div>
+
+                    {standaloneExpanded && (
+                      <motion.div
+                        className="modpack-content"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        {organizedAddons.standalone.map((addon) => (
+                          <div key={addon.id} className="installed-item">
+                            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                              <span>{addon.name}</span>
+                              <span style={{ fontSize: 12, color: '#999' }}>
+                                {addon.type} • {addon.enabled ? 'Включен' : 'Отключен'}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <button className="outline-button" onClick={() => toggleAddon(addon)}>
+                                {addon.enabled ? 'Отключить' : 'Включить'}
+                              </button>
+                              <button className="outline-button delete-button" onClick={() => deleteAddon(addon)}>
+                                Удалить
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </motion.div>
+                    )}
                   </div>
-                ))}
+                )}
+
+                {/* Modpack sections */}
+                {Object.entries(organizedAddons.modpacks).map(([modpackKey, addons]) => {
+                  const firstAddon = addons[0]
+                  const origin = firstAddon.origin
+                  const modpackTitle = origin?.projectTitle || origin?.modpackId || 'Modpack'
+                  const isExpanded = expandedModpacks.has(modpackKey)
+
+                  return (
+                    <div key={modpackKey} className="modpack-section">
+                      <div className="modpack-header" onClick={() => toggleModpackExpansion(modpackKey)} style={{ cursor: 'pointer' }}>
+                        <div className="modpack-title">
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                            style={{
+                              marginRight: 8,
+                              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                              transition: 'transform 0.2s'
+                            }}
+                          >
+                            <path d="M9 18l6-6-6-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                          {modpackTitle}
+                          <span style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>
+                            {origin?.detectedLoader} • {addons.length} дополнений
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <button
+                            className="outline-button delete-button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              deleteModpack(modpackKey, modpackTitle)
+                            }}
+                            style={{ fontSize: 12, padding: '4px 8px' }}
+                          >
+                            Удалить пак
+                          </button>
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <motion.div
+                          className="modpack-content"
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2 }}
+                        >
+                          {addons.map((addon) => (
+                            <div key={addon.id} className="installed-item">
+                              <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                <span>{addon.name}</span>
+                                <span style={{ fontSize: 12, color: '#999' }}>
+                                  {addon.type} • {addon.enabled ? 'Включен' : 'Отключен'}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <button className="outline-button" onClick={() => toggleAddon(addon)}>
+                                  {addon.enabled ? 'Отключить' : 'Включить'}
+                                </button>
+                                <button className="outline-button delete-button" onClick={() => deleteAddon(addon)}>
+                                  Удалить
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </motion.div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </section>
@@ -1388,6 +1699,23 @@ function App() {
                     />
                   </div>
                 </label>
+                <button
+                  type="button"
+                  className={`settings-toggle-card ${settings.fullscreen ? 'active' : ''}`}
+                  onClick={() => setSettings({ ...settings, fullscreen: !settings.fullscreen })}
+                  aria-pressed={settings.fullscreen}
+                >
+                  <div className="settings-toggle-copy">
+                    <span className="settings-toggle-eyebrow">Запуск</span>
+                    <span className="settings-toggle-title">Полноэкранный режим</span>
+                    <span className="settings-toggle-text">
+                      Minecraft будет открываться сразу на весь экран при запуске из лаунчера.
+                    </span>
+                  </div>
+                  <span className={`settings-toggle-pill ${settings.fullscreen ? 'active' : ''}`}>
+                    <span className="settings-toggle-thumb" />
+                  </span>
+                </button>
                 <button className="button" onClick={handleSaveSettings}>Сохранить настройки</button>
               </div>
             </div>

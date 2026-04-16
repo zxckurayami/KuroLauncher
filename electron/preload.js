@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('launcher', {
   getAuthState: () => ipcRenderer.invoke('launcher:getAuthState'),
   loginUser: (email, password) => ipcRenderer.invoke('launcher:loginUser', email, password),
   registerUser: (email, password) => ipcRenderer.invoke('launcher:registerUser', email, password),
+  logoutUser: () => ipcRenderer.invoke('launcher:logoutUser'),
   launchProfile: (profileId) => ipcRenderer.invoke('launcher:launchProfile', profileId),
   searchModrinth: (query, options) => ipcRenderer.invoke('launcher:searchModrinth', query, options),
   getModrinthProject: (projectId) => ipcRenderer.invoke('launcher:getModrinthProject', projectId),
@@ -26,9 +27,9 @@ contextBridge.exposeInMainWorld('launcher', {
   installModrinthProject: (projectId, options) => ipcRenderer.invoke('launcher:installModrinthProject', projectId, options),
   installModrinthVersion: (versionId, options) => ipcRenderer.invoke('launcher:installModrinthVersion', versionId, options),
   getInstalledModrinthAddons: () => ipcRenderer.invoke('launcher:getInstalledModrinthAddons'),
-  toggleInstalledAddon: (type, name, enabled) => ipcRenderer.invoke('launcher:toggleInstalledAddon', type, name, enabled),
-  deleteInstalledAddon: (type, name) => ipcRenderer.invoke('launcher:deleteInstalledAddon', type, name)
-  ,
+  toggleInstalledAddon: (type, name, enabled, addonPath) => ipcRenderer.invoke('launcher:toggleInstalledAddon', type, name, enabled, addonPath),
+  deleteInstalledAddon: (type, name, addonPath) => ipcRenderer.invoke('launcher:deleteInstalledAddon', type, name, addonPath),
+  deleteModpackDirectory: (modpackKey) => ipcRenderer.invoke('launcher:deleteModpackDirectory', modpackKey),
   // Skin management
   saveSkin: (profileId, base64Data) => ipcRenderer.invoke('launcher:saveSkin', profileId, base64Data),
   getSkinUrl: (profileId) => ipcRenderer.invoke('launcher:getSkinUrl', profileId)

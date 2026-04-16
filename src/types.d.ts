@@ -19,6 +19,7 @@ declare global {
       getAuthState: () => Promise<{ email: string; loggedIn: boolean; access_token?: string; client_token?: string; uuid?: string; name?: string; user_properties?: any; meta?: any }>
       loginUser: (email: string, password: string) => Promise<any>
       registerUser: (email: string, password: string) => Promise<any>
+      logoutUser: () => Promise<boolean>
       launchProfile: (profileId: string) => Promise<boolean>
       deleteProfile: (profileId: string) => Promise<boolean>
       searchModrinth: (query: string, options?: any) => Promise<any>
@@ -28,8 +29,9 @@ declare global {
       installModrinthProject: (projectId: string, options?: any) => Promise<any>
       installModrinthVersion: (versionId: string, options?: any) => Promise<any>
       getInstalledModrinthAddons: () => Promise<any[]>
-      toggleInstalledAddon: (type: string, name: string, enabled: boolean) => Promise<any>
-      deleteInstalledAddon: (type: string, name: string) => Promise<any>
+      toggleInstalledAddon: (type: string, name: string, enabled: boolean, addonPath?: string) => Promise<any>
+      deleteInstalledAddon: (type: string, name: string, addonPath?: string) => Promise<any>
+      deleteModpackDirectory: (modpackKey: string) => Promise<boolean>
     }
     windowControls?: {
       minimize: () => Promise<any>
@@ -40,4 +42,14 @@ declare global {
       removeMaximizeChange: (listener: (event: any, isMaximized: boolean) => void) => void
     }
   }
+}
+
+declare module '*.png' {
+  const content: string
+  export default content
+}
+
+declare module '*.ico' {
+  const content: string
+  export default content
 }
