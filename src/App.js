@@ -11,8 +11,27 @@ const tabs = [
     { id: 'Skins', label: 'Скины' }
 ];
 const defaultSteveSkinUrl = new URL('../skins/default-skin.png', import.meta.url).href;
+function createProfileDraft(settings, initialProfile) {
+    return {
+        name: initialProfile?.name || '',
+        versionId: initialProfile?.versionId || '',
+        ram: initialProfile?.ram || 'auto',
+        javaPath: initialProfile?.javaPath || settings.javaPath,
+        username: initialProfile?.username || '',
+        loader: (initialProfile?.loader || 'vanilla'),
+        loaderVersion: initialProfile?.loaderVersion || '',
+        fullscreenMode: (initialProfile?.fullscreenMode || 'global')
+    };
+}
+function formatProfileFullscreen(mode) {
+    if (mode === 'on')
+        return 'Фуллскрин';
+    if (mode === 'off')
+        return 'Окно';
+    return 'Экран: по лаунчеру';
+}
 // Custom select component to replace native <select> for better styling
-function CustomSelect({ options, value, onChange, placeholder }) {
+function CustomSelect({ options, value, onChange, placeholder, disabled = false }) {
     const [open, setOpen] = useState(false);
     const ref = useRef(null);
     useEffect(() => {
@@ -26,7 +45,7 @@ function CustomSelect({ options, value, onChange, placeholder }) {
         return () => document.removeEventListener('mousedown', onDoc);
     }, []);
     const selected = options.find((o) => o.value === value);
-    return (_jsxs("div", { className: "custom-select", ref: ref, children: [_jsxs("button", { type: "button", className: `custom-select-trigger ${!value ? 'placeholder' : ''}`, onClick: () => setOpen((s) => !s), "aria-haspopup": "listbox", "aria-expanded": open, children: [_jsx("span", { className: "trigger-label", children: selected ? selected.label : placeholder }), _jsx("svg", { width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", xmlns: "http://www.w3.org/2000/svg", children: _jsx("path", { d: "M7 10l5 5 5-5", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }) })] }), open && (_jsx("div", { className: "custom-options", role: "listbox", children: options.map((opt) => (_jsx("div", { role: "option", tabIndex: 0, className: `custom-option ${opt.value === value ? 'selected' : ''}`, onMouseDown: (e) => {
+    return (_jsxs("div", { className: "custom-select", ref: ref, children: [_jsxs("button", { type: "button", className: `custom-select-trigger ${!value ? 'placeholder' : ''} ${open ? 'open' : ''} ${disabled ? 'disabled' : ''}`, onClick: () => !disabled && setOpen((s) => !s), "aria-haspopup": "listbox", "aria-expanded": open, disabled: disabled, children: [_jsx("span", { className: "trigger-label", children: selected ? selected.label : placeholder }), _jsx("svg", { width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", xmlns: "http://www.w3.org/2000/svg", children: _jsx("path", { d: "M7 10l5 5 5-5", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }) })] }), open && (_jsx("div", { className: "custom-options", role: "listbox", children: options.map((opt) => (_jsx("div", { role: "option", tabIndex: 0, className: `custom-option ${opt.value === value ? 'selected' : ''}`, onMouseDown: (e) => {
                         e.preventDefault();
                         onChange(opt.value);
                         setOpen(false);
@@ -39,35 +58,12 @@ function CustomSelect({ options, value, onChange, placeholder }) {
                     }, children: opt.label }, opt.value))) }))] }));
 }
 // Profile Form Component
-function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loaderVersionLoading, ramOptions, resetTrigger, onLoaderVersionChange, showAlert }) {
-    const [formData, setFormData] = useState({
-        name: '',
-        versionId: '',
-        ram: 'auto',
-        javaPath: settings.javaPath,
-        username: '',
-        loader: 'vanilla',
-        loaderVersion: ''
-    });
-    // Reset form when resetTrigger changes
+function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loaderVersionLoading, ramOptions, resetTrigger, onLoaderVersionChange, showAlert, initialProfile, mode = 'create', submitLabel, onCancel }) {
+    const [formData, setFormData] = useState(() => createProfileDraft(settings, initialProfile || undefined));
+    const isEditMode = mode === 'edit';
     useEffect(() => {
-        setFormData({
-            name: '',
-            versionId: '',
-            ram: 'auto',
-            javaPath: settings.javaPath,
-            username: '',
-            loader: 'vanilla',
-            loaderVersion: ''
-        });
-    }, [resetTrigger, settings.javaPath]);
-    // Auto-fetch loader versions when version or loader changes
-    useEffect(() => {
-        if (formData.versionId && formData.loader !== 'vanilla') {
-            // This would need to be passed from parent or we need to move fetchLoaderVersions logic here
-            // For now, we'll handle this in the parent component
-        }
-    }, [formData.versionId, formData.loader]);
+        setFormData(createProfileDraft(settings, initialProfile || undefined));
+    }, [resetTrigger, initialProfile?.id, mode, settings.javaPath]);
     const handleSubmit = () => {
         if (!formData.name || !formData.versionId) {
             showAlert('Введите имя и выберите версию профиля');
@@ -78,20 +74,21 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
     const updateFormData = (updates) => {
         const newData = { ...formData, ...updates };
         setFormData(newData);
-        // Trigger loader version fetch when version or loader changes
+        if (isEditMode)
+            return;
         if (updates.versionId || updates.loader) {
             if (newData.versionId && newData.loader !== 'vanilla') {
                 onLoaderVersionChange(newData.versionId, newData.loader);
             }
         }
     };
-    return (_jsxs("div", { className: "form-grid", children: [_jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0418\u043C\u044F \u043F\u0440\u043E\u0444\u0438\u043B\u044F" }), _jsx("input", { className: "form-input", value: formData.name, onChange: (e) => updateFormData({ name: e.target.value }), placeholder: "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043C\u044F \u043F\u0440\u043E\u0444\u0438\u043B\u044F" })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0412\u0435\u0440\u0441\u0438\u044F" }), _jsx(CustomSelect, { options: [{ value: '', label: 'Выберите версию' }, ...installed.map((it) => ({ value: it.id, label: it.id }))], value: formData.versionId, onChange: (val) => updateFormData({ versionId: val }), placeholder: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0432\u0435\u0440\u0441\u0438\u044E" })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A" }), _jsx(CustomSelect, { options: [
+    return (_jsxs("div", { className: "form-grid", children: [isEditMode && (_jsxs("div", { className: "profile-form-intro", children: [_jsx("div", { className: "profile-form-eyebrow", children: "\u041F\u0440\u043E\u0444\u0438\u043B\u044C" }), _jsx("div", { className: "profile-form-title", children: "\u0422\u043E\u043D\u043A\u0430\u044F \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430 \u0437\u0430\u043F\u0443\u0441\u043A\u0430" }), _jsx("div", { className: "profile-form-text", children: "\u0414\u043B\u044F \u043C\u043E\u0434\u043F\u0430\u043A\u043E\u0432 \u043C\u043E\u0436\u043D\u043E \u043F\u043E\u0434\u043D\u044F\u0442\u044C \u043F\u0430\u043C\u044F\u0442\u044C, \u0443\u043A\u0430\u0437\u0430\u0442\u044C \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u0443\u044E Java \u0438 \u043F\u0435\u0440\u0435\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C \u0440\u0435\u0436\u0438\u043C \u044D\u043A\u0440\u0430\u043D\u0430 \u0431\u0435\u0437 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u0433\u043B\u043E\u0431\u0430\u043B\u044C\u043D\u044B\u0445 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043A \u043B\u0430\u0443\u043D\u0447\u0435\u0440\u0430." })] })), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0418\u043C\u044F \u043F\u0440\u043E\u0444\u0438\u043B\u044F" }), _jsx("input", { className: "form-input", value: formData.name, onChange: (e) => updateFormData({ name: e.target.value }), placeholder: "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043C\u044F \u043F\u0440\u043E\u0444\u0438\u043B\u044F" })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0412\u0435\u0440\u0441\u0438\u044F" }), _jsx(CustomSelect, { options: [{ value: '', label: 'Выберите версию' }, ...installed.map((it) => ({ value: it.id, label: it.id }))], value: formData.versionId, onChange: (val) => updateFormData({ versionId: val }), placeholder: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0432\u0435\u0440\u0441\u0438\u044E", disabled: isEditMode })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A" }), _jsx(CustomSelect, { options: [
                             { value: 'vanilla', label: 'Vanilla' },
                             { value: 'forge', label: 'Forge' },
                             { value: 'fabric', label: 'Fabric' },
                             { value: 'quilt', label: 'Quilt' },
                             { value: 'neoforge', label: 'NeoForge' }
-                        ], value: formData.loader, onChange: (val) => updateFormData({ loader: val, loaderVersion: '' }), placeholder: "\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A" })] }), formData.loader !== 'vanilla' && (_jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0412\u0435\u0440\u0441\u0438\u044F \u0437\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A\u0430" }), (() => {
+                        ], value: formData.loader, onChange: (val) => updateFormData({ loader: val, loaderVersion: '' }), placeholder: "\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A", disabled: isEditMode })] }), formData.loader !== 'vanilla' && (_jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0412\u0435\u0440\u0441\u0438\u044F \u0437\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A\u0430" }), (() => {
                         const mcParts = formData.versionId.split('.');
                         const mcMajor = parseInt(mcParts[1] || '0', 10);
                         const mcMinor = parseInt(mcParts[2] || '0', 10);
@@ -100,13 +97,20 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
                         if (neoforgeUnsupported) {
                             return (_jsxs("div", { className: "loader-version-warning warning", children: [_jsx("span", { className: "warning-icon", children: "\u26A0" }), "\u0414\u043E\u0441\u0442\u0443\u043F\u043D\u043E \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F MC 1.20.1 \u0438 \u043D\u043E\u0432\u0435\u0435"] }));
                         }
+                        if (isEditMode) {
+                            return (_jsx(CustomSelect, { options: [{ value: formData.loaderVersion || '', label: formData.loaderVersion || 'Автовыбор при запуске' }], value: formData.loaderVersion || '', onChange: () => { }, placeholder: "\u0412\u0435\u0440\u0441\u0438\u044F \u0437\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A\u0430", disabled: true }));
+                        }
                         if (!loaderVersionLoading && formData.versionId && availableLoaderVersions.length === 0) {
                             return (_jsx("div", { className: "loader-version-warning", children: "\u0412\u0435\u0440\u0441\u0438\u0438 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u044B \u0434\u043B\u044F \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u043E\u0439 MC \u0432\u0435\u0440\u0441\u0438\u0438" }));
                         }
                         return (_jsx(CustomSelect, { options: loaderVersionLoading
                                 ? [{ value: '', label: 'Загрузка...' }]
-                                : [{ value: '', label: 'Выберите версию' }, ...availableLoaderVersions], value: formData.loaderVersion || '', onChange: (val) => updateFormData({ loaderVersion: val }), placeholder: loaderVersionLoading ? 'Загрузка...' : 'Выберите версию' }));
-                    })()] })), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "RAM" }), _jsx(CustomSelect, { options: ramOptions, value: formData.ram, onChange: (val) => updateFormData({ ram: val }), placeholder: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0430\u043C\u044F\u0442\u044C" })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "Java \u043F\u0443\u0442\u044C" }), _jsx("input", { className: "form-input", value: formData.javaPath, onChange: (e) => updateFormData({ javaPath: e.target.value }), placeholder: "\u041F\u0443\u0442\u044C \u043A Java" })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u041D\u0438\u043A\u043D\u0435\u0439\u043C" }), _jsx("input", { className: "form-input", value: formData.username, onChange: (e) => updateFormData({ username: e.target.value }), placeholder: "\u0412\u0430\u0448 \u043D\u0438\u043A\u043D\u0435\u0439\u043C" })] }), _jsx("button", { className: "btn btn-primary", onClick: handleSubmit, children: "\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u043F\u0440\u043E\u0444\u0438\u043B\u044C" })] }));
+                                : [{ value: '', label: 'Выберите версию' }, ...availableLoaderVersions], value: formData.loaderVersion || '', onChange: (val) => updateFormData({ loaderVersion: val }), placeholder: loaderVersionLoading ? 'Загрузка...' : 'Выберите версию', disabled: isEditMode }));
+                    })()] })), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "RAM" }), _jsx(CustomSelect, { options: ramOptions, value: formData.ram, onChange: (val) => updateFormData({ ram: val }), placeholder: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0430\u043C\u044F\u0442\u044C" })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "Java \u043F\u0443\u0442\u044C" }), _jsx("input", { className: "form-input", value: formData.javaPath, onChange: (e) => updateFormData({ javaPath: e.target.value }), placeholder: "\u041F\u0443\u0442\u044C \u043A Java" })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u0420\u0435\u0436\u0438\u043C \u044D\u043A\u0440\u0430\u043D\u0430" }), _jsx(CustomSelect, { options: [
+                            { value: 'global', label: 'Как в настройках лаунчера' },
+                            { value: 'on', label: 'Всегда полный экран' },
+                            { value: 'off', label: 'Всегда оконный режим' }
+                        ], value: formData.fullscreenMode, onChange: (val) => updateFormData({ fullscreenMode: val }), placeholder: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0440\u0435\u0436\u0438\u043C" })] }), _jsxs("div", { className: "form-group", children: [_jsx("label", { className: "form-label", children: "\u041D\u0438\u043A\u043D\u0435\u0439\u043C" }), _jsx("input", { className: "form-input", value: formData.username, onChange: (e) => updateFormData({ username: e.target.value }), placeholder: "\u0412\u0430\u0448 \u043D\u0438\u043A\u043D\u0435\u0439\u043C" })] }), _jsxs("div", { className: "profile-form-actions", children: [_jsx("button", { className: "btn btn-primary", onClick: handleSubmit, children: submitLabel || (isEditMode ? 'Сохранить изменения' : 'Сохранить профиль') }), isEditMode && onCancel && (_jsx("button", { className: "btn btn-ghost", type: "button", onClick: onCancel, children: "\u0412\u044B\u0439\u0442\u0438 \u043A \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u044E" }))] })] }));
 }
 const ramOptions = [
     { value: 'auto', label: 'Авто (рекомендуется)' },
@@ -160,6 +164,10 @@ function App() {
     const [isBusy, setIsBusy] = useState(false);
     const [progressInfo, setProgressInfo] = useState(null);
     const [selectedProfile, setSelectedProfile] = useState(null);
+    const [editingProfileId, setEditingProfileId] = useState(null);
+    const [launchConsoleOpen, setLaunchConsoleOpen] = useState(false);
+    const [launchConsolePhase, setLaunchConsolePhase] = useState('idle');
+    const [launchConsoleEntries, setLaunchConsoleEntries] = useState([]);
     const [profileFormResetTrigger, setProfileFormResetTrigger] = useState(0); // Trigger for form reset
     const [availableLoaderVersions, setAvailableLoaderVersions] = useState([]);
     const [loaderVersionLoading, setLoaderVersionLoading] = useState(false);
@@ -190,6 +198,17 @@ function App() {
     const skinViewerContainerRef = useRef(null);
     const viewerRef = useRef(null);
     const viewerIdRef = useRef(0);
+    const launchConsoleViewportRef = useRef(null);
+    const isLaunchConsoleView = useMemo(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'launch-console', []);
+    const pushLaunchConsoleEntry = (message, tone = 'info') => {
+        const normalized = String(message || '').trim();
+        if (!normalized)
+            return;
+        setLaunchConsoleEntries((prev) => {
+            const next = [...prev, { id: Date.now() + Math.random(), message: normalized, tone }];
+            return next.slice(-220);
+        });
+    };
     // Custom confirm dialog - doesn't steal focus like window.confirm
     const showConfirm = (message) => {
         return new Promise((resolve) => {
@@ -214,6 +233,7 @@ function App() {
         });
     };
     const activeProfile = useMemo(() => profiles.find((profile) => profile.id === selectedProfile), [profiles, selectedProfile]);
+    const editingProfile = useMemo(() => profiles.find((profile) => profile.id === editingProfileId), [profiles, editingProfileId]);
     const userInitials = useMemo(() => {
         const source = auth.loggedIn ? auth.email : 'Гость';
         const normalized = source.replace(/@.*$/, '').split(/[^a-zA-Z0-9а-яА-Я]+/).filter(Boolean);
@@ -354,6 +374,12 @@ function App() {
             }
         };
     }, [activeTab, skinModel, skinDataUrl, profileSkinUrl, defaultSteveSkinUrl]);
+    useEffect(() => {
+        if ((!launchConsoleOpen && !isLaunchConsoleView) || !launchConsoleViewportRef.current)
+            return;
+        const element = launchConsoleViewportRef.current;
+        element.scrollTop = element.scrollHeight;
+    }, [launchConsoleEntries, launchConsoleOpen, isLaunchConsoleView]);
     // Pagination logic with filtering and search
     const filteredVersions = versions.filter(v => {
         const matchesFilter = versionFilter === 'all' || v.type === versionFilter;
@@ -373,6 +399,8 @@ function App() {
         setStatus('Готово');
     }
     useEffect(() => {
+        if (isLaunchConsoleView)
+            return;
         const wc = window.windowControls;
         if (!wc)
             return;
@@ -380,7 +408,7 @@ function App() {
         const listener = (_event, value) => setIsMaximized(Boolean(value));
         wc.onMaximizeChange(listener);
         return () => wc.removeMaximizeChange(listener);
-    }, []);
+    }, [isLaunchConsoleView]);
     const handleMinimize = () => {
         ;
         window.windowControls?.minimize();
@@ -400,14 +428,29 @@ function App() {
         const installedVersions = await window.launcher.getInstalledVersions();
         setInstalled(installedVersions);
         const storedProfiles = await window.launcher.getProfiles();
-        // Ensure all profiles have loader field
-        const updatedProfiles = storedProfiles.map(p => ({ ...p, loader: p.loader || 'vanilla', loaderVersion: p.loaderVersion || '' }));
+        const updatedProfiles = storedProfiles.map((p) => ({
+            ...p,
+            loader: p.loader || 'vanilla',
+            loaderVersion: p.loaderVersion || '',
+            ram: p.ram || 'auto',
+            javaPath: p.javaPath || defaultSettings.javaPath,
+            username: p.username || '',
+            fullscreenMode: p.fullscreenMode || 'global'
+        }));
         setProfiles(updatedProfiles);
         const storedSettings = await window.launcher.getSettings();
         setSettings({ ...defaultSettings, ...storedSettings });
         const authState = await window.launcher.getAuthState();
         setAuth(authState);
     }
+    useEffect(() => {
+        if (selectedProfile && !profiles.some((profile) => profile.id === selectedProfile)) {
+            setSelectedProfile(null);
+        }
+        if (editingProfileId && !profiles.some((profile) => profile.id === editingProfileId)) {
+            setEditingProfileId(null);
+        }
+    }, [profiles, selectedProfile, editingProfileId]);
     async function fetchLoaderVersions(versionId, loader) {
         setAvailableLoaderVersions([]);
         if (!versionId || loader === 'vanilla') {
@@ -441,10 +484,22 @@ function App() {
         }
     }
     useEffect(() => {
+        if (isLaunchConsoleView) {
+            window.launcher.getLaunchConsoleState().then((state) => {
+                if (!state)
+                    return;
+                setLaunchConsolePhase(state.phase || 'idle');
+                setLaunchConsoleEntries(Array.isArray(state.entries) ? state.entries : []);
+                if (state.progress) {
+                    setProgressInfo({ label: 'Запуск Minecraft...', current: state.progress.current, total: state.progress.total });
+                }
+            }).catch(() => { });
+            return;
+        }
         loadMeta();
         loadState();
         loadInstalledAddons();
-    }, []);
+    }, [isLaunchConsoleView]);
     async function loadModrinthState() {
         setModrinthLoading(true);
         try {
@@ -614,10 +669,26 @@ function App() {
         const launchProgressListener = (_event, data) => {
             setStatus(data.message);
             setIsBusy(true);
+            if (data.phase) {
+                setLaunchConsolePhase(data.phase);
+            }
+            const tone = data.gameStarted
+                ? 'success'
+                : data.message?.includes('Ошибка') || data.message?.includes('Exception') || data.message?.includes('Error')
+                    ? 'error'
+                    : 'info';
+            pushLaunchConsoleEntry(data.message, tone);
             if (data.gameExited) {
                 setGameRunning(false);
                 setIsBusy(false);
                 setProgressInfo(null);
+                setLaunchConsolePhase('idle');
+            }
+            else if (data.gameStarted) {
+                setLaunchConsolePhase('started');
+                window.setTimeout(() => {
+                    setLaunchConsoleOpen(false);
+                }, 260);
             }
             else if (data.progress?.total) {
                 setProgressInfo({ label: data.message, current: data.progress.current, total: data.progress.total });
@@ -678,12 +749,31 @@ function App() {
         }
         await window.launcher.saveProfile({ ...profileData, id: `${Date.now()}` });
         setStatus('Профиль сохранён');
-        loadState();
+        setProfileFormResetTrigger((k) => k + 1);
+        await loadState();
+    }
+    async function saveProfileSettings(profileData) {
+        if (!editingProfile)
+            return;
+        const nextProfile = {
+            ...editingProfile,
+            ...profileData,
+            id: editingProfile.id,
+            modpackPath: editingProfile.modpackPath,
+            skin: editingProfile.skin
+        };
+        await window.launcher.saveProfile(nextProfile);
+        setStatus(`Настройки профиля "${nextProfile.name}" сохранены`);
+        await loadState();
     }
     async function launchProfile(profile) {
         setIsBusy(true);
         setProgressInfo({ label: `Запуск ${profile.name}...` });
         setStatus(`Запуск ${profile.name}...`);
+        setLaunchConsolePhase('preparing');
+        setLaunchConsoleEntries([
+            { id: Date.now(), message: `Подготавливаю запуск профиля "${profile.name}"...`, tone: 'info' }
+        ]);
         try {
             await window.launcher.launchProfile(profile.id);
             setGameRunning(true);
@@ -695,6 +785,8 @@ function App() {
             setStatus(`Ошибка запуска: ${error?.message || 'проверьте Java и установку версии'}`);
             setProgressInfo(null);
             setIsBusy(false);
+            setLaunchConsolePhase('error');
+            pushLaunchConsoleEntry(`Ошибка запуска: ${error?.message || 'проверьте Java и установку версии'}`, 'error');
         }
     }
     async function deleteProfile(profileId) {
@@ -707,6 +799,9 @@ function App() {
             // Clear selected profile if it was deleted
             if (selectedProfile === profileId) {
                 setSelectedProfile(null);
+            }
+            if (editingProfileId === profileId) {
+                setEditingProfileId(null);
             }
             // Trigger form reset
             setProfileFormResetTrigger(k => k + 1);
@@ -751,13 +846,25 @@ function App() {
         };
     }, [themeClass, accentColor]);
     useEffect(() => {
+        if (isLaunchConsoleView)
+            return;
         const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
         const handleChange = (e) => {
             setSettings(s => ({ ...s, theme: e.matches ? 'dark' : 'light' }));
         };
         mediaQuery.addEventListener('change', handleChange);
         return () => mediaQuery.removeEventListener('change', handleChange);
-    }, []);
+    }, [isLaunchConsoleView]);
+    const launchConsolePanel = (_jsxs("div", { className: "launch-console-panel", children: [_jsxs("div", { className: "launch-console-header", children: [_jsxs("div", { className: "launch-console-copy", children: [_jsx("span", { className: "launch-console-eyebrow", children: "Launch Console" }), _jsx("h3", { className: "launch-console-title", children: "\u0417\u0430\u043F\u0443\u0441\u043A Minecraft" }), _jsx("p", { className: "launch-console-subtitle", children: "\u041E\u043A\u043D\u043E \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442 \u0448\u0430\u0433\u0438 \u043F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0438, \u0437\u0430\u0433\u0440\u0443\u0437\u043A\u0443 \u0431\u0438\u0431\u043B\u0438\u043E\u0442\u0435\u043A \u0438 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F JVM \u0434\u043E \u043F\u043E\u044F\u0432\u043B\u0435\u043D\u0438\u044F \u0441\u0430\u043C\u043E\u0433\u043E Minecraft." })] }), _jsxs("div", { className: "launch-console-header-actions", children: [_jsx("div", { className: `launch-console-badge ${launchConsolePhase}`, children: launchConsolePhase === 'started'
+                                    ? 'Игра открыта'
+                                    : launchConsolePhase === 'error'
+                                        ? 'Ошибка запуска'
+                                        : 'Подготовка' }), _jsx("button", { type: "button", className: "launch-console-close", onClick: () => window.windowControls?.close?.(), "aria-label": "\u0417\u0430\u043A\u0440\u044B\u0442\u044C \u043E\u043A\u043D\u043E \u043A\u043E\u043D\u0441\u043E\u043B\u0438", children: "\u00D7" })] })] }), progressInfo && (_jsxs("div", { className: "launch-console-progress", children: [_jsxs("div", { className: "launch-console-progress-top", children: [_jsx("span", { children: progressInfo.label }), _jsx("span", { children: progressInfo.total
+                                    ? `${Math.min(100, Math.round(((progressInfo.current ?? 0) / progressInfo.total) * 100))}%`
+                                    : 'LIVE' })] }), _jsx("div", { className: "progress-bar", children: _jsx("div", { className: "progress-bar-fill", style: { width: progressInfo.total ? `${Math.min(100, Math.round(((progressInfo.current ?? 0) / progressInfo.total) * 100))}%` : '100%' } }) })] })), _jsxs("div", { className: "launch-console-log", ref: launchConsoleViewportRef, children: [launchConsoleEntries.length === 0 && (_jsx("div", { className: "launch-console-empty", children: "\u041E\u0436\u0438\u0434\u0430\u043D\u0438\u0435 \u0441\u043E\u0431\u044B\u0442\u0438\u0439 \u0437\u0430\u043F\u0443\u0441\u043A\u0430..." })), launchConsoleEntries.map((entry) => (_jsxs("div", { className: `launch-console-line ${entry.tone}`, children: [_jsx("span", { className: "launch-console-line-mark" }), _jsx("span", { className: "launch-console-line-text", children: entry.message })] }, entry.id)))] })] }));
+    if (isLaunchConsoleView) {
+        return (_jsxs("div", { className: `launch-console-shell ${themeClass}`, "data-accent": accentColor, children: [_jsx("div", { className: "live-bg" }), _jsx("div", { className: "noise-overlay" }), launchConsolePanel] }));
+    }
     return (_jsxs("div", { className: "app-shell", children: [_jsx("div", { className: "live-bg" }), _jsx("div", { className: "noise-overlay" }), _jsxs("div", { className: "titlebar", children: [_jsx("div", { className: "titlebar-title", children: "KuroLauncher" }), _jsxs("div", { className: "titlebar-controls", children: [_jsx("button", { className: "titlebar-btn", onClick: handleMinimize, "aria-label": "Minimize", children: _jsx("svg", { viewBox: "0 0 12 2", xmlns: "http://www.w3.org/2000/svg", fill: "none", children: _jsx("rect", { x: "0", y: "0", width: "12", height: "2", rx: "1", fill: "currentColor" }) }) }), _jsx("button", { className: "titlebar-btn", onClick: handleToggleMax, "aria-label": "Maximize", children: isMaximized ? (_jsxs("svg", { viewBox: "0 0 24 24", xmlns: "http://www.w3.org/2000/svg", fill: "none", children: [_jsx("rect", { x: "3", y: "6", width: "14", height: "12", stroke: "currentColor", strokeWidth: "1.6", rx: "1" }), _jsx("path", { d: "M7 6V4h10v10h-2", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" })] })) : (_jsx("svg", { viewBox: "0 0 24 24", xmlns: "http://www.w3.org/2000/svg", fill: "none", children: _jsx("rect", { x: "4", y: "4", width: "16", height: "16", stroke: "currentColor", strokeWidth: "1.6", rx: "1" }) })) }), _jsx("button", { className: "titlebar-btn", onClick: handleClose, "aria-label": "Close", children: _jsx("svg", { viewBox: "0 0 24 24", xmlns: "http://www.w3.org/2000/svg", fill: "none", children: _jsx("path", { d: "M4 4l16 16M20 4L4 20", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }) }) })] })] }), _jsxs("div", { className: "header glass-panel", children: [_jsxs("div", { className: "header-left", children: [_jsxs("div", { className: "header-logo", children: [_jsx("img", { src: logoIcon, alt: "KuroLauncher", className: "header-logo-icon" }), _jsx("div", { className: "header-logo-text", children: "KuroLauncher" })] }), _jsxs("div", { className: `header-status ${isBusy ? 'loading' : ''}`, children: [_jsx("span", { className: "status-dot" }), status] })] }), _jsx("div", { className: "header-right", children: _jsxs("div", { className: "user-section", children: [_jsx("button", { className: "user-avatar", onClick: () => setUserMenuOpen((prev) => !prev), children: userInitials }), _jsxs("div", { className: "user-info", children: [_jsx("div", { className: "user-name", children: auth.loggedIn ? 'Пользователь' : 'Гость' }), _jsx("div", { className: "user-email", children: auth.loggedIn ? auth.email : 'Не вошёл в систему' })] }), _jsx("div", { className: `user-dropdown ${userMenuOpen ? 'open' : ''}`, children: auth.loggedIn ? (_jsxs(_Fragment, { children: [_jsx("button", { className: "outline-button", onClick: () => { setUserMenuOpen(false); setActiveTab('Settings'); }, children: "\u041F\u0440\u043E\u0444\u0438\u043B\u044C" }), _jsx("button", { className: "outline-button", onClick: () => { handleLogout(); setUserMenuOpen(false); }, children: "\u0412\u044B\u0439\u0442\u0438" })] })) : (_jsx("button", { className: "outline-button", onClick: () => {
                                             setUserMenuOpen(false);
                                             setActiveTab('Settings');
@@ -813,7 +920,17 @@ function App() {
                                                             { value: 'snapshot', label: 'Снапшоты' },
                                                             { value: 'old_beta', label: 'Бета' },
                                                             { value: 'old_alpha', label: 'Альфа' }
-                                                        ].map(filter => (_jsx("button", { className: `filter-btn ${versionFilter === filter.value ? 'active' : ''}`, onClick: () => setVersionFilter(filter.value), children: filter.label }, filter.value))) })] })] }), _jsx("div", { className: "version-list", children: currentVersions.map((version) => (_jsxs("article", { className: "version-card", children: [_jsxs("div", { children: [_jsx("div", { className: "version-id", children: version.id }), _jsxs("div", { className: "version-meta", children: [version.type, " \u2022 ", new Date(version.releaseTime).toLocaleDateString()] })] }), _jsx("button", { className: "outline-button", disabled: installingVersion === version.id, onClick: () => installVersion(version.id), children: installingVersion === version.id ? 'Установка...' : 'Установить' })] }, version.id))) }), totalPages > 1 && (_jsxs("div", { className: "pagination", children: [_jsx("button", { className: "pagination-btn", disabled: currentPage === 1, onClick: () => setCurrentPage(currentPage - 1), children: "\u2039 \u041F\u0440\u0435\u0434\u044B\u0434\u0443\u0449\u0430\u044F" }), _jsxs("div", { className: "pagination-info", children: ["\u0421\u0442\u0440\u0430\u043D\u0438\u0446\u0430 ", currentPage, " \u0438\u0437 ", totalPages] }), _jsx("button", { className: "pagination-btn", disabled: currentPage === totalPages, onClick: () => setCurrentPage(currentPage + 1), children: "\u0421\u043B\u0435\u0434\u0443\u044E\u0449\u0430\u044F \u203A" })] }))] }), _jsxs("div", { className: "panel panel small", children: [_jsx("div", { className: "panel-title", children: "\u0423\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044B\u0435" }), _jsxs("div", { className: "installed-list", children: [installed.length === 0 && _jsx("div", { className: "hint", children: "\u041D\u0435\u0442 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044B\u0445 \u0432\u0435\u0440\u0441\u0438\u0439" }), installed.map((item) => (_jsxs("div", { className: "installed-item", children: [_jsx("span", { children: item.id }), _jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [_jsx("span", { children: item.status }), _jsx("button", { className: "outline-button delete-button", onClick: () => deleteInstalledVersion(item.id), disabled: isBusy, children: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C" })] })] }, item.id)))] })] })] })), activeTab === 'Profiles' && (_jsxs("section", { className: "profiles-grid scrollable-content", children: [_jsxs("div", { className: "panel panel small", children: [_jsx("div", { className: "panel-title", children: "\u041F\u0440\u043E\u0444\u0438\u043B\u0438" }), _jsxs("div", { className: "profiles-list", children: [profiles.map((profile) => (_jsxs("article", { className: "profile-card", children: [_jsxs("div", { className: "profile-details", children: [_jsx("div", { className: "profile-name", children: profile.name }), _jsxs("div", { className: "profile-meta", children: [profile.versionId, profile.loader !== 'vanilla' ? ` • ${profile.loader.charAt(0).toUpperCase() + profile.loader.slice(1)}` : '', profile.loaderVersion ? ` ${profile.loaderVersion}` : '', ' • ', profile.ram === 'auto' ? 'Авто' : profile.ram] })] }), _jsxs("div", { className: "profile-buttons", children: [_jsx("button", { className: "button launch-button", onClick: () => launchProfile(profile), disabled: gameRunning, children: gameRunning ? 'Игра запущена' : 'Запустить' }), _jsx("button", { className: "btn btn-ghost delete-button", onClick: () => deleteProfile(profile.id), children: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C" })] })] }, profile.id))), profiles.length === 0 && _jsx("div", { className: "hint", children: "\u0421\u043E\u0437\u0434\u0430\u0439\u0442\u0435 \u043F\u0440\u043E\u0444\u0438\u043B\u044C \u0434\u043B\u044F \u0437\u0430\u043F\u0443\u0441\u043A\u0430" })] })] }), _jsxs("div", { className: "panel panel large", children: [_jsx("div", { className: "panel-title", children: "\u041D\u043E\u0432\u044B\u0439 \u043F\u0440\u043E\u0444\u0438\u043B\u044C" }), _jsx(ProfileForm, { onSave: saveNewProfile, settings: settings, installed: installed, availableLoaderVersions: availableLoaderVersions, loaderVersionLoading: loaderVersionLoading, ramOptions: ramOptions, resetTrigger: profileFormResetTrigger, onLoaderVersionChange: (versionId, loader) => fetchLoaderVersions(versionId, loader), showAlert: showAlert })] })] })), activeTab === 'Mods' && (_jsxs("section", { className: "modrinth-grid scrollable-content", children: [_jsxs("div", { className: "panel panel large", children: [_jsx("div", { className: "panel-title", children: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043C\u043E\u0434\u043E\u0432" }), _jsxs("div", { className: "form-grid", children: [_jsxs("label", { children: ["\u041F\u043E\u0438\u0441\u043A", _jsx("input", { value: modrinthQuery, onChange: (e) => setModrinthQuery(e.target.value), placeholder: "\u0418\u043C\u044F \u043C\u043E\u0434\u0430, \u0442\u0435\u043A\u0441\u0442 \u0438\u043B\u0438 ID" })] }), _jsxs("label", { children: ["\u0412\u0435\u0440\u0441\u0438\u044F Minecraft", _jsx("input", { value: modrinthSearchVersion, onChange: (e) => setModrinthSearchVersion(e.target.value), placeholder: "\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440 1.20.1" })] }), _jsxs("label", { children: ["\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A", _jsx(CustomSelect, { options: [
+                                                        ].map(filter => (_jsx("button", { className: `filter-btn ${versionFilter === filter.value ? 'active' : ''}`, onClick: () => setVersionFilter(filter.value), children: filter.label }, filter.value))) })] })] }), _jsx("div", { className: "version-list", children: currentVersions.map((version) => (_jsxs("article", { className: "version-card", children: [_jsxs("div", { children: [_jsx("div", { className: "version-id", children: version.id }), _jsxs("div", { className: "version-meta", children: [version.type, " \u2022 ", new Date(version.releaseTime).toLocaleDateString()] })] }), _jsx("button", { className: "outline-button", disabled: installingVersion === version.id, onClick: () => installVersion(version.id), children: installingVersion === version.id ? 'Установка...' : 'Установить' })] }, version.id))) }), totalPages > 1 && (_jsxs("div", { className: "pagination", children: [_jsx("button", { className: "pagination-btn", disabled: currentPage === 1, onClick: () => setCurrentPage(currentPage - 1), children: "\u2039 \u041F\u0440\u0435\u0434\u044B\u0434\u0443\u0449\u0430\u044F" }), _jsxs("div", { className: "pagination-info", children: ["\u0421\u0442\u0440\u0430\u043D\u0438\u0446\u0430 ", currentPage, " \u0438\u0437 ", totalPages] }), _jsx("button", { className: "pagination-btn", disabled: currentPage === totalPages, onClick: () => setCurrentPage(currentPage + 1), children: "\u0421\u043B\u0435\u0434\u0443\u044E\u0449\u0430\u044F \u203A" })] }))] }), _jsxs("div", { className: "panel panel small", children: [_jsx("div", { className: "panel-title", children: "\u0423\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044B\u0435" }), _jsxs("div", { className: "installed-list", children: [installed.length === 0 && _jsx("div", { className: "hint", children: "\u041D\u0435\u0442 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044B\u0445 \u0432\u0435\u0440\u0441\u0438\u0439" }), installed.map((item) => (_jsxs("div", { className: "installed-item", children: [_jsx("span", { children: item.id }), _jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [_jsx("span", { children: item.status }), _jsx("button", { className: "outline-button delete-button", onClick: () => deleteInstalledVersion(item.id), disabled: isBusy, children: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C" })] })] }, item.id)))] })] })] })), activeTab === 'Profiles' && (_jsxs("section", { className: "profiles-grid scrollable-content", children: [_jsxs("div", { className: "panel panel small", children: [_jsx("div", { className: "panel-title", children: "\u041F\u0440\u043E\u0444\u0438\u043B\u0438" }), _jsxs("div", { className: "profiles-list", children: [profiles.map((profile) => (_jsxs("article", { className: `profile-card ${selectedProfile === profile.id ? 'selected' : ''}`, onClick: () => setSelectedProfile(profile.id), children: [_jsxs("div", { className: "profile-details", children: [_jsxs("div", { className: "profile-card-top", children: [_jsx("div", { className: "profile-name", children: profile.name }), profile.modpackPath && _jsx("span", { className: "profile-badge", children: "\u041C\u043E\u0434\u043F\u0430\u043A" })] }), _jsxs("div", { className: "profile-meta", children: [profile.versionId, profile.loader !== 'vanilla' ? ` • ${profile.loader.charAt(0).toUpperCase() + profile.loader.slice(1)}` : '', profile.loaderVersion ? ` ${profile.loaderVersion}` : ''] }), _jsxs("div", { className: "profile-chip-row", children: [_jsx("span", { className: "profile-chip", children: profile.ram === 'auto' ? 'RAM: авто' : `RAM: ${profile.ram}` }), _jsx("span", { className: "profile-chip", children: profile.javaPath && profile.javaPath !== settings.javaPath ? 'Java: своя' : 'Java: общая' }), _jsx("span", { className: "profile-chip", children: formatProfileFullscreen(profile.fullscreenMode) })] })] }), _jsxs("div", { className: "profile-actions", children: [_jsx("button", { className: "button launch-button", onClick: (e) => {
+                                                                    e.stopPropagation();
+                                                                    launchProfile(profile);
+                                                                }, disabled: gameRunning, children: gameRunning ? 'Игра запущена' : 'Запустить' }), _jsx("button", { className: "outline-button", onClick: (e) => {
+                                                                    e.stopPropagation();
+                                                                    setSelectedProfile(profile.id);
+                                                                    setEditingProfileId(profile.id);
+                                                                }, children: "\u041D\u0430\u0441\u0442\u0440\u043E\u0438\u0442\u044C" }), _jsx("button", { className: "btn btn-ghost delete-button", onClick: (e) => {
+                                                                    e.stopPropagation();
+                                                                    deleteProfile(profile.id);
+                                                                }, children: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C" })] })] }, profile.id))), profiles.length === 0 && _jsx("div", { className: "hint", children: "\u0421\u043E\u0437\u0434\u0430\u0439\u0442\u0435 \u043F\u0440\u043E\u0444\u0438\u043B\u044C \u0434\u043B\u044F \u0437\u0430\u043F\u0443\u0441\u043A\u0430" })] })] }), _jsx("div", { className: "panel panel large", children: _jsxs("div", { className: `profile-config-panel ${editingProfile ? '' : 'profile-config-panel-muted'}`, children: [_jsxs("div", { className: "profile-panel-header", children: [_jsx("div", { className: "panel-title", children: editingProfile ? `Настройка: ${editingProfile.name}` : 'Новый профиль' }), editingProfile && (_jsx("button", { type: "button", className: "btn btn-ghost", onClick: () => setEditingProfileId(null), children: "\u041D\u0430\u0437\u0430\u0434 \u043A \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u044E" }))] }), editingProfile ? (_jsx(ProfileForm, { onSave: saveProfileSettings, settings: settings, installed: installed, availableLoaderVersions: availableLoaderVersions, loaderVersionLoading: loaderVersionLoading, ramOptions: ramOptions, resetTrigger: profileFormResetTrigger, onLoaderVersionChange: (versionId, loader) => fetchLoaderVersions(versionId, loader), showAlert: showAlert, initialProfile: editingProfile, mode: "edit", submitLabel: "\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u043F\u0440\u043E\u0444\u0438\u043B\u044F", onCancel: () => setEditingProfileId(null) }, `edit-${editingProfile.id}`)) : (_jsx(ProfileForm, { onSave: saveNewProfile, settings: settings, installed: installed, availableLoaderVersions: availableLoaderVersions, loaderVersionLoading: loaderVersionLoading, ramOptions: ramOptions, resetTrigger: profileFormResetTrigger, onLoaderVersionChange: (versionId, loader) => fetchLoaderVersions(versionId, loader), showAlert: showAlert, mode: "create", submitLabel: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u043F\u0440\u043E\u0444\u0438\u043B\u044C" }))] }) })] })), activeTab === 'Mods' && (_jsxs("section", { className: "modrinth-grid scrollable-content", children: [_jsxs("div", { className: "panel panel large", children: [_jsx("div", { className: "panel-title", children: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043C\u043E\u0434\u043E\u0432" }), _jsxs("div", { className: "form-grid", children: [_jsxs("label", { children: ["\u041F\u043E\u0438\u0441\u043A", _jsx("input", { value: modrinthQuery, onChange: (e) => setModrinthQuery(e.target.value), placeholder: "\u0418\u043C\u044F \u043C\u043E\u0434\u0430, \u0442\u0435\u043A\u0441\u0442 \u0438\u043B\u0438 ID" })] }), _jsxs("label", { children: ["\u0412\u0435\u0440\u0441\u0438\u044F Minecraft", _jsx("input", { value: modrinthSearchVersion, onChange: (e) => setModrinthSearchVersion(e.target.value), placeholder: "\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440 1.20.1" })] }), _jsxs("label", { children: ["\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A", _jsx(CustomSelect, { options: [
                                                             { value: '', label: 'Любой' },
                                                             { value: 'fabric', label: 'Fabric' },
                                                             { value: 'forge', label: 'Forge' },

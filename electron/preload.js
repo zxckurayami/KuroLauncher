@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('launcher', {
   fetchVersionManifest: () => ipcRenderer.invoke('launcher:fetchVersionManifest'),
   getInstalledVersions: () => ipcRenderer.invoke('launcher:getInstalledVersions'),
+  getLaunchConsoleState: () => ipcRenderer.invoke('launcher:getLaunchConsoleState'),
   installVersion: (versionId) => ipcRenderer.invoke('launcher:installVersion', versionId),
   deleteInstalledVersion: (versionId) => ipcRenderer.invoke('launcher:deleteInstalledVersion', versionId),
   onInstallProgress: (listener) => ipcRenderer.on('launcher:installProgress', listener),

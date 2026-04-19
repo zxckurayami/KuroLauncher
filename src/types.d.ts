@@ -5,11 +5,12 @@ declare global {
     launcher: {
       fetchVersionManifest: () => Promise<Array<{ id: string; type: string; releaseTime: string }>>
       getInstalledVersions: () => Promise<Array<{ id: string; status: string; path: string }>>
+      getLaunchConsoleState: () => Promise<{ phase: string; progress: { current?: number; total?: number } | null; entries: Array<{ id: number; message: string; tone: 'info' | 'success' | 'error' }> }>
       installVersion: (versionId: string) => Promise<boolean>
       deleteInstalledVersion: (versionId: string) => Promise<boolean>
       onInstallProgress: (listener: (event: any, data: { message: string }) => void) => void
       removeInstallProgress: (listener: (event: any, data: { message: string }) => void) => void
-      onLaunchProgress: (listener: (event: any, data: { message: string; progress?: { current: number; total: number }; gameExited?: boolean }) => void) => void
+      onLaunchProgress: (listener: (event: any, data: { message: string; progress?: { current: number; total: number }; gameExited?: boolean; gameStarted?: boolean; stream?: string; phase?: string }) => void) => void
       removeLaunchProgress: (listener: (event: any, data: { message: string }) => void) => void
       getProfiles: () => Promise<any[]>
       saveProfile: (profile: any) => Promise<boolean>

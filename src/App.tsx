@@ -23,6 +23,7 @@ type Profile = {
   username: string
   loader: 'vanilla' | 'forge' | 'fabric' | 'quilt' | 'neoforge'
   loaderVersion?: string
+  fullscreenMode?: 'global' | 'on' | 'off'
   modpackPath?: string
   skin?: {
     url?: string
@@ -43,6 +44,12 @@ type AuthState = {
   loggedIn: boolean
 }
 
+type LaunchConsoleEntry = {
+  id: number
+  message: string
+  tone: 'info' | 'success' | 'error'
+}
+
 const tabs = [
   { id: 'Dashboard', label: 'Главная' },
   { id: 'Versions', label: 'Версии' },
@@ -56,8 +63,27 @@ const defaultSteveSkinUrl = new URL('../skins/default-skin.png', import.meta.url
 
 type Tab = typeof tabs[number]['id']
 
+function createProfileDraft(settings: Settings, initialProfile?: Partial<Profile>) {
+  return {
+    name: initialProfile?.name || '',
+    versionId: initialProfile?.versionId || '',
+    ram: initialProfile?.ram || 'auto',
+    javaPath: initialProfile?.javaPath || settings.javaPath,
+    username: initialProfile?.username || '',
+    loader: (initialProfile?.loader || 'vanilla') as Profile['loader'],
+    loaderVersion: initialProfile?.loaderVersion || '',
+    fullscreenMode: (initialProfile?.fullscreenMode || 'global') as NonNullable<Profile['fullscreenMode']>
+  }
+}
+
+function formatProfileFullscreen(mode?: Profile['fullscreenMode']) {
+  if (mode === 'on') return 'Фуллскрин'
+  if (mode === 'off') return 'Окно'
+  return 'Экран: по лаунчеру'
+}
+
 // Custom select component to replace native <select> for better styling
-function CustomSelect({ options, value, onChange, placeholder }: any) {
+function CustomSelect({ options, value, onChange, placeholder, disabled = false }: any) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
 
@@ -76,10 +102,11 @@ function CustomSelect({ options, value, onChange, placeholder }: any) {
     <div className="custom-select" ref={ref}>
       <button
         type="button"
-        className={`custom-select-trigger ${!value ? 'placeholder' : ''}`}
-        onClick={() => setOpen((s) => !s)}
+        className={`custom-select-trigger ${!value ? 'placeholder' : ''} ${open ? 'open' : ''} ${disabled ? 'disabled' : ''}`}
+        onClick={() => !disabled && setOpen((s) => !s)}
         aria-haspopup="listbox"
         aria-expanded={open}
+        disabled={disabled}
       >
         <span className="trigger-label">{selected ? selected.label : placeholder}</span>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -118,7 +145,7 @@ function CustomSelect({ options, value, onChange, placeholder }: any) {
 }
 
 // Profile Form Component
-function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loaderVersionLoading, ramOptions, resetTrigger, onLoaderVersionChange, showAlert }: {
+function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loaderVersionLoading, ramOptions, resetTrigger, onLoaderVersionChange, showAlert, initialProfile, mode = 'create', submitLabel, onCancel }: {
   onSave: (profile: any) => void,
   settings: Settings,
   installed: InstalledVersion[],
@@ -127,38 +154,18 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
   ramOptions: any[],
   resetTrigger: number,
   onLoaderVersionChange: (versionId: string, loader: string) => void,
-  showAlert: (message: string) => void
+  showAlert: (message: string) => void,
+  initialProfile?: Partial<Profile> | null,
+  mode?: 'create' | 'edit',
+  submitLabel?: string,
+  onCancel?: () => void
 }) {
-  const [formData, setFormData] = useState({
-    name: '',
-    versionId: '',
-    ram: 'auto',
-    javaPath: settings.javaPath,
-    username: '',
-    loader: 'vanilla' as 'vanilla' | 'forge' | 'fabric' | 'quilt' | 'neoforge',
-    loaderVersion: ''
-  })
+  const [formData, setFormData] = useState(() => createProfileDraft(settings, initialProfile || undefined))
+  const isEditMode = mode === 'edit'
 
-  // Reset form when resetTrigger changes
   useEffect(() => {
-    setFormData({
-      name: '',
-      versionId: '',
-      ram: 'auto',
-      javaPath: settings.javaPath,
-      username: '',
-      loader: 'vanilla',
-      loaderVersion: ''
-    })
-  }, [resetTrigger, settings.javaPath])
-
-  // Auto-fetch loader versions when version or loader changes
-  useEffect(() => {
-    if (formData.versionId && formData.loader !== 'vanilla') {
-      // This would need to be passed from parent or we need to move fetchLoaderVersions logic here
-      // For now, we'll handle this in the parent component
-    }
-  }, [formData.versionId, formData.loader])
+    setFormData(createProfileDraft(settings, initialProfile || undefined))
+  }, [resetTrigger, initialProfile?.id, mode, settings.javaPath])
 
   const handleSubmit = () => {
     if (!formData.name || !formData.versionId) {
@@ -172,7 +179,7 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
     const newData = { ...formData, ...updates }
     setFormData(newData)
 
-    // Trigger loader version fetch when version or loader changes
+    if (isEditMode) return
     if (updates.versionId || updates.loader) {
       if (newData.versionId && newData.loader !== 'vanilla') {
         onLoaderVersionChange(newData.versionId, newData.loader)
@@ -182,6 +189,15 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
 
   return (
     <div className="form-grid">
+      {isEditMode && (
+        <div className="profile-form-intro">
+          <div className="profile-form-eyebrow">Профиль</div>
+          <div className="profile-form-title">Тонкая настройка запуска</div>
+          <div className="profile-form-text">
+            Для модпаков можно поднять память, указать отдельную Java и переопределить режим экрана без изменения глобальных настроек лаунчера.
+          </div>
+        </div>
+      )}
       <div className="form-group">
         <label className="form-label">Имя профиля</label>
         <input
@@ -198,6 +214,7 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
           value={formData.versionId}
           onChange={(val: string) => updateFormData({ versionId: val })}
           placeholder="Выберите версию"
+          disabled={isEditMode}
         />
       </div>
       <div className="form-group">
@@ -213,6 +230,7 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
           value={formData.loader}
           onChange={(val: string) => updateFormData({ loader: val as typeof formData.loader, loaderVersion: '' })}
           placeholder="Загрузчик"
+          disabled={isEditMode}
         />
       </div>
       {formData.loader !== 'vanilla' && (
@@ -234,6 +252,18 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
               )
             }
 
+            if (isEditMode) {
+              return (
+                <CustomSelect
+                  options={[{ value: formData.loaderVersion || '', label: formData.loaderVersion || 'Автовыбор при запуске' }]}
+                  value={formData.loaderVersion || ''}
+                  onChange={() => {}}
+                  placeholder="Версия загрузчика"
+                  disabled
+                />
+              )
+            }
+
             if (!loaderVersionLoading && formData.versionId && availableLoaderVersions.length === 0) {
               return (
                 <div className="loader-version-warning">
@@ -252,6 +282,7 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
                 value={formData.loaderVersion || ''}
                 onChange={(val: string) => updateFormData({ loaderVersion: val })}
                 placeholder={loaderVersionLoading ? 'Загрузка...' : 'Выберите версию'}
+                disabled={isEditMode}
               />
             )
           })()}
@@ -276,6 +307,19 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
         />
       </div>
       <div className="form-group">
+        <label className="form-label">Режим экрана</label>
+        <CustomSelect
+          options={[
+            { value: 'global', label: 'Как в настройках лаунчера' },
+            { value: 'on', label: 'Всегда полный экран' },
+            { value: 'off', label: 'Всегда оконный режим' }
+          ]}
+          value={formData.fullscreenMode}
+          onChange={(val: string) => updateFormData({ fullscreenMode: val as NonNullable<Profile['fullscreenMode']> })}
+          placeholder="Выберите режим"
+        />
+      </div>
+      <div className="form-group">
         <label className="form-label">Никнейм</label>
         <input
           className="form-input"
@@ -284,7 +328,12 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
           placeholder="Ваш никнейм"
         />
       </div>
-      <button className="btn btn-primary" onClick={handleSubmit}>Сохранить профиль</button>
+      <div className="profile-form-actions">
+        <button className="btn btn-primary" onClick={handleSubmit}>{submitLabel || (isEditMode ? 'Сохранить изменения' : 'Сохранить профиль')}</button>
+        {isEditMode && onCancel && (
+          <button className="btn btn-ghost" type="button" onClick={onCancel}>Выйти к созданию</button>
+        )}
+      </div>
     </div>
   )
 }
@@ -345,6 +394,10 @@ function App() {
   const [isBusy, setIsBusy] = useState(false)
   const [progressInfo, setProgressInfo] = useState<{ label: string; current?: number; total?: number } | null>(null)
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null)
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null)
+  const [launchConsoleOpen, setLaunchConsoleOpen] = useState(false)
+  const [launchConsolePhase, setLaunchConsolePhase] = useState<'idle' | 'preparing' | 'started' | 'error'>('idle')
+  const [launchConsoleEntries, setLaunchConsoleEntries] = useState<LaunchConsoleEntry[]>([])
 
   const [profileFormResetTrigger, setProfileFormResetTrigger] = useState(0) // Trigger for form reset
   const [availableLoaderVersions, setAvailableLoaderVersions] = useState<Array<{ value: string; label: string }>>([])
@@ -376,6 +429,21 @@ function App() {
   const skinViewerContainerRef = useRef<HTMLDivElement | null>(null)
   const viewerRef = useRef<any>(null)
   const viewerIdRef = useRef<number>(0)
+  const launchConsoleViewportRef = useRef<HTMLDivElement | null>(null)
+  const isLaunchConsoleView = useMemo(
+    () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'launch-console',
+    []
+  )
+
+  const pushLaunchConsoleEntry = (message: string, tone: LaunchConsoleEntry['tone'] = 'info') => {
+    const normalized = String(message || '').trim()
+    if (!normalized) return
+
+    setLaunchConsoleEntries((prev) => {
+      const next = [...prev, { id: Date.now() + Math.random(), message: normalized, tone }]
+      return next.slice(-220)
+    })
+  }
 
   // Custom confirm dialog - doesn't steal focus like window.confirm
   const showConfirm = (message: string): Promise<boolean> => {
@@ -403,6 +471,7 @@ function App() {
   }
 
   const activeProfile = useMemo(() => profiles.find((profile) => profile.id === selectedProfile), [profiles, selectedProfile])
+  const editingProfile = useMemo(() => profiles.find((profile) => profile.id === editingProfileId), [profiles, editingProfileId])
 
   const userInitials = useMemo(() => {
     const source = auth.loggedIn ? auth.email : 'Гость'
@@ -549,6 +618,12 @@ function App() {
     }
   }, [activeTab, skinModel, skinDataUrl, profileSkinUrl, defaultSteveSkinUrl])
 
+  useEffect(() => {
+    if ((!launchConsoleOpen && !isLaunchConsoleView) || !launchConsoleViewportRef.current) return
+    const element = launchConsoleViewportRef.current
+    element.scrollTop = element.scrollHeight
+  }, [launchConsoleEntries, launchConsoleOpen, isLaunchConsoleView])
+
   // Pagination logic with filtering and search
   const filteredVersions = versions.filter(v => {
     const matchesFilter = versionFilter === 'all' || v.type === versionFilter
@@ -572,13 +647,14 @@ function App() {
   }
 
   useEffect(() => {
+    if (isLaunchConsoleView) return
     const wc = (window as any).windowControls
     if (!wc) return
     wc.isMaximized().then((v: boolean) => setIsMaximized(Boolean(v))).catch(() => {})
     const listener = (_event: any, value: boolean) => setIsMaximized(Boolean(value))
     wc.onMaximizeChange(listener)
     return () => wc.removeMaximizeChange(listener)
-  }, [])
+  }, [isLaunchConsoleView])
 
   const handleMinimize = () => {
     ;(window as any).windowControls?.minimize()
@@ -599,14 +675,30 @@ function App() {
     const installedVersions = await window.launcher.getInstalledVersions()
     setInstalled(installedVersions)
     const storedProfiles = await window.launcher.getProfiles()
-    // Ensure all profiles have loader field
-    const updatedProfiles = storedProfiles.map(p => ({ ...p, loader: p.loader || 'vanilla', loaderVersion: p.loaderVersion || '' }))
+    const updatedProfiles = storedProfiles.map((p) => ({
+      ...p,
+      loader: p.loader || 'vanilla',
+      loaderVersion: p.loaderVersion || '',
+      ram: p.ram || 'auto',
+      javaPath: p.javaPath || defaultSettings.javaPath,
+      username: p.username || '',
+      fullscreenMode: p.fullscreenMode || 'global'
+    }))
     setProfiles(updatedProfiles)
     const storedSettings = await window.launcher.getSettings()
     setSettings({ ...defaultSettings, ...storedSettings })
     const authState = await window.launcher.getAuthState()
     setAuth(authState)
   }
+
+  useEffect(() => {
+    if (selectedProfile && !profiles.some((profile) => profile.id === selectedProfile)) {
+      setSelectedProfile(null)
+    }
+    if (editingProfileId && !profiles.some((profile) => profile.id === editingProfileId)) {
+      setEditingProfileId(null)
+    }
+  }, [profiles, selectedProfile, editingProfileId])
 
   async function fetchLoaderVersions(versionId: string, loader: Profile['loader']) {
     setAvailableLoaderVersions([])
@@ -640,10 +732,22 @@ function App() {
   }
 
   useEffect(() => {
+    if (isLaunchConsoleView) {
+      window.launcher.getLaunchConsoleState().then((state) => {
+        if (!state) return
+        setLaunchConsolePhase((state.phase as any) || 'idle')
+        setLaunchConsoleEntries(Array.isArray(state.entries) ? state.entries : [])
+        if (state.progress) {
+          setProgressInfo({ label: 'Запуск Minecraft...', current: state.progress.current, total: state.progress.total })
+        }
+      }).catch(() => {})
+      return
+    }
+
     loadMeta()
     loadState()
     loadInstalledAddons()
-  }, [])
+  }, [isLaunchConsoleView])
 
 
 
@@ -814,14 +918,33 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const launchProgressListener = (_event: any, data: { message: string; progress?: { current: number; total: number }; gameExited?: boolean }) => {
+    const launchProgressListener = (_event: any, data: { message: string; progress?: { current: number; total: number }; gameExited?: boolean; gameStarted?: boolean; stream?: string; phase?: string }) => {
       setStatus(data.message)
       setIsBusy(true)
+
+      if (data.phase) {
+        setLaunchConsolePhase(data.phase as any)
+      }
+
+      const tone: LaunchConsoleEntry['tone'] =
+        data.gameStarted
+          ? 'success'
+          : data.message?.includes('Ошибка') || data.message?.includes('Exception') || data.message?.includes('Error')
+            ? 'error'
+            : 'info'
+
+      pushLaunchConsoleEntry(data.message, tone)
 
       if (data.gameExited) {
         setGameRunning(false)
         setIsBusy(false)
         setProgressInfo(null)
+        setLaunchConsolePhase('idle')
+      } else if (data.gameStarted) {
+        setLaunchConsolePhase('started')
+        window.setTimeout(() => {
+          setLaunchConsoleOpen(false)
+        }, 260)
       } else if (data.progress?.total) {
         setProgressInfo({ label: data.message, current: data.progress.current, total: data.progress.total })
       } else {
@@ -880,13 +1003,34 @@ function App() {
     }
     await window.launcher.saveProfile({ ...profileData, id: `${Date.now()}` })
     setStatus('Профиль сохранён')
-    loadState()
+    setProfileFormResetTrigger((k) => k + 1)
+    await loadState()
+  }
+
+  async function saveProfileSettings(profileData: any) {
+    if (!editingProfile) return
+
+    const nextProfile = {
+      ...editingProfile,
+      ...profileData,
+      id: editingProfile.id,
+      modpackPath: editingProfile.modpackPath,
+      skin: editingProfile.skin
+    }
+
+    await window.launcher.saveProfile(nextProfile)
+    setStatus(`Настройки профиля "${nextProfile.name}" сохранены`)
+    await loadState()
   }
 
   async function launchProfile(profile: Profile) {
     setIsBusy(true)
     setProgressInfo({ label: `Запуск ${profile.name}...` })
     setStatus(`Запуск ${profile.name}...`)
+    setLaunchConsolePhase('preparing')
+    setLaunchConsoleEntries([
+      { id: Date.now(), message: `Подготавливаю запуск профиля "${profile.name}"...`, tone: 'info' }
+    ])
 
     try {
       await window.launcher.launchProfile(profile.id)
@@ -898,6 +1042,8 @@ function App() {
       setStatus(`Ошибка запуска: ${error?.message || 'проверьте Java и установку версии'}`)
       setProgressInfo(null)
       setIsBusy(false)
+      setLaunchConsolePhase('error')
+      pushLaunchConsoleEntry(`Ошибка запуска: ${error?.message || 'проверьте Java и установку версии'}`, 'error')
     }
   }
 
@@ -912,6 +1058,9 @@ function App() {
       // Clear selected profile if it was deleted
       if (selectedProfile === profileId) {
         setSelectedProfile(null)
+      }
+      if (editingProfileId === profileId) {
+        setEditingProfileId(null)
       }
 
       // Trigger form reset
@@ -959,13 +1108,86 @@ function App() {
   }, [themeClass, accentColor])
 
   useEffect(() => {
+    if (isLaunchConsoleView) return
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     const handleChange = (e: MediaQueryListEvent) => {
       setSettings(s => ({ ...s, theme: e.matches ? 'dark' : 'light' }))
     }
     mediaQuery.addEventListener('change', handleChange)
     return () => mediaQuery.removeEventListener('change', handleChange)
-  }, [])
+  }, [isLaunchConsoleView])
+
+  const launchConsolePanel = (
+    <div className="launch-console-panel">
+      <div className="launch-console-header">
+        <div className="launch-console-copy">
+          <span className="launch-console-eyebrow">Launch Console</span>
+          <h3 className="launch-console-title">Запуск Minecraft</h3>
+          <p className="launch-console-subtitle">
+            Окно показывает шаги подготовки, загрузку библиотек и сообщения JVM до появления самого Minecraft.
+          </p>
+        </div>
+        <div className="launch-console-header-actions">
+          <div className={`launch-console-badge ${launchConsolePhase}`}>
+            {launchConsolePhase === 'started'
+              ? 'Игра открыта'
+              : launchConsolePhase === 'error'
+                ? 'Ошибка запуска'
+                : 'Подготовка'}
+          </div>
+          <button
+            type="button"
+            className="launch-console-close"
+            onClick={() => (window as any).windowControls?.close?.()}
+            aria-label="Закрыть окно консоли"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      {progressInfo && (
+        <div className="launch-console-progress">
+          <div className="launch-console-progress-top">
+            <span>{progressInfo.label}</span>
+            <span>
+              {progressInfo.total
+                ? `${Math.min(100, Math.round(((progressInfo.current ?? 0) / progressInfo.total) * 100))}%`
+                : 'LIVE'}
+            </span>
+          </div>
+          <div className="progress-bar">
+            <div
+              className="progress-bar-fill"
+              style={{ width: progressInfo.total ? `${Math.min(100, Math.round(((progressInfo.current ?? 0) / progressInfo.total) * 100))}%` : '100%' }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="launch-console-log" ref={launchConsoleViewportRef}>
+        {launchConsoleEntries.length === 0 && (
+          <div className="launch-console-empty">Ожидание событий запуска...</div>
+        )}
+        {launchConsoleEntries.map((entry) => (
+          <div key={entry.id} className={`launch-console-line ${entry.tone}`}>
+            <span className="launch-console-line-mark" />
+            <span className="launch-console-line-text">{entry.message}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
+  if (isLaunchConsoleView) {
+    return (
+      <div className={`launch-console-shell ${themeClass}`} data-accent={accentColor}>
+        <div className="live-bg"></div>
+        <div className="noise-overlay"></div>
+        {launchConsolePanel}
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -1363,25 +1585,57 @@ function App() {
               <div className="panel-title">Профили</div>
               <div className="profiles-list">
                 {profiles.map((profile) => (
-                  <article key={profile.id} className="profile-card">
+                  <article
+                    key={profile.id}
+                    className={`profile-card ${selectedProfile === profile.id ? 'selected' : ''}`}
+                    onClick={() => setSelectedProfile(profile.id)}
+                  >
                     <div className="profile-details">
-                      <div className="profile-name">{profile.name}</div>
+                      <div className="profile-card-top">
+                        <div className="profile-name">{profile.name}</div>
+                        {profile.modpackPath && <span className="profile-badge">Модпак</span>}
+                      </div>
                       <div className="profile-meta">
                         {profile.versionId}
                         {profile.loader !== 'vanilla' ? ` • ${profile.loader.charAt(0).toUpperCase() + profile.loader.slice(1)}` : ''}
                         {profile.loaderVersion ? ` ${profile.loaderVersion}` : ''}
-                        {' • '}{profile.ram === 'auto' ? 'Авто' : profile.ram}
+                      </div>
+                      <div className="profile-chip-row">
+                        <span className="profile-chip">{profile.ram === 'auto' ? 'RAM: авто' : `RAM: ${profile.ram}`}</span>
+                        <span className="profile-chip">{profile.javaPath && profile.javaPath !== settings.javaPath ? 'Java: своя' : 'Java: общая'}</span>
+                        <span className="profile-chip">{formatProfileFullscreen(profile.fullscreenMode)}</span>
                       </div>
                     </div>
-                    <div className="profile-buttons">
+                    <div className="profile-actions">
                       <button
                         className="button launch-button"
-                        onClick={() => launchProfile(profile)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          launchProfile(profile)
+                        }}
                         disabled={gameRunning}
                       >
                         {gameRunning ? 'Игра запущена' : 'Запустить'}
                       </button>
-                      <button className="btn btn-ghost delete-button" onClick={() => deleteProfile(profile.id)}>Удалить</button>
+                      <button
+                        className="outline-button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedProfile(profile.id)
+                          setEditingProfileId(profile.id)
+                        }}
+                      >
+                        Настроить
+                      </button>
+                      <button
+                        className="btn btn-ghost delete-button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          deleteProfile(profile.id)
+                        }}
+                      >
+                        Удалить
+                      </button>
                     </div>
                   </article>
                 ))}
@@ -1390,18 +1644,53 @@ function App() {
             </div>
 
             <div className="panel panel large">
-              <div className="panel-title">Новый профиль</div>
-              <ProfileForm
-                onSave={saveNewProfile}
-                settings={settings}
-                installed={installed}
-                availableLoaderVersions={availableLoaderVersions}
-                loaderVersionLoading={loaderVersionLoading}
-                ramOptions={ramOptions}
-                resetTrigger={profileFormResetTrigger}
-                onLoaderVersionChange={(versionId, loader) => fetchLoaderVersions(versionId, loader as any)}
-                showAlert={showAlert}
-              />
+              <div className={`profile-config-panel ${editingProfile ? '' : 'profile-config-panel-muted'}`}>
+                <div className="profile-panel-header">
+                  <div className="panel-title">{editingProfile ? `Настройка: ${editingProfile.name}` : 'Новый профиль'}</div>
+                  {editingProfile && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => setEditingProfileId(null)}
+                    >
+                      Назад к созданию
+                    </button>
+                  )}
+                </div>
+
+                {editingProfile ? (
+                  <ProfileForm
+                    key={`edit-${editingProfile.id}`}
+                    onSave={saveProfileSettings}
+                    settings={settings}
+                    installed={installed}
+                    availableLoaderVersions={availableLoaderVersions}
+                    loaderVersionLoading={loaderVersionLoading}
+                    ramOptions={ramOptions}
+                    resetTrigger={profileFormResetTrigger}
+                    onLoaderVersionChange={(versionId, loader) => fetchLoaderVersions(versionId, loader as any)}
+                    showAlert={showAlert}
+                    initialProfile={editingProfile}
+                    mode="edit"
+                    submitLabel="Сохранить настройки профиля"
+                    onCancel={() => setEditingProfileId(null)}
+                  />
+                ) : (
+                  <ProfileForm
+                    onSave={saveNewProfile}
+                    settings={settings}
+                    installed={installed}
+                    availableLoaderVersions={availableLoaderVersions}
+                    loaderVersionLoading={loaderVersionLoading}
+                    ramOptions={ramOptions}
+                    resetTrigger={profileFormResetTrigger}
+                    onLoaderVersionChange={(versionId, loader) => fetchLoaderVersions(versionId, loader as any)}
+                    showAlert={showAlert}
+                    mode="create"
+                    submitLabel="Создать профиль"
+                  />
+                )}
+              </div>
             </div>
           </section>
         )}

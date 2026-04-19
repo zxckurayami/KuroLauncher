@@ -41,7 +41,7 @@
     "vite": "^5.4.1",
     "wait-on": "^8.0.0"
   },
-"build": {
+  "build": {
     "appId": "com.kurolauncher.app",
     "productName": "KuroLauncher",
     "files": [
@@ -51,9 +51,19 @@
     ],
     "extraResources": [],
     "win": {
+      "icon": "logo/KuroLauncher.ico",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "target": [
-        "dir"
+        "nsis",
+        "portable"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "KuroLauncher"
     },
     "electronDist": "node_modules/electron/dist",
     "asar": true,

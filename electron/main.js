@@ -15,6 +15,148 @@ const url = require('url')
 // Paths will be initialized when app is ready
 let userData, minecraftPath, versionsPath, profilesPath, settingsPath, authPath, modsPath, shaderpacksPath, resourcepacksPath, modpacksPath, modrinthCachePath
 const defaultLauncherSettings = { theme: 'dark', javaPath: 'java', ram: 'auto', fullscreen: false }
+const verboseLaunchLogging = process.env.KURO_DEBUG_LAUNCH === '1'
+let mainWindow = null
+let launchConsoleWindow = null
+let currentDevServerPort = null
+let launchConsoleState = {
+  phase: 'idle',
+  progress: null,
+  entries: []
+}
+
+function inferLaunchTone(message) {
+  const text = String(message || '')
+  if (/ошибка|exception|error|failed/i.test(text)) return 'error'
+  if (/открыто|запущен|запущена|успешно|готово/i.test(text)) return 'success'
+  return 'info'
+}
+
+function resetLaunchConsoleState() {
+  launchConsoleState = {
+    phase: 'idle',
+    progress: null,
+    entries: []
+  }
+}
+
+function broadcastLaunchProgress(payload = {}) {
+  if (payload.reset) {
+    resetLaunchConsoleState()
+  }
+
+  const message = typeof payload.message === 'string' ? payload.message.trim() : ''
+  const tone = payload.tone || inferLaunchTone(message)
+
+  if (payload.phase) {
+    launchConsoleState.phase = payload.phase
+  } else if (payload.gameStarted) {
+    launchConsoleState.phase = 'started'
+  } else if (payload.gameExited) {
+    launchConsoleState.phase = 'idle'
+  } else if (tone === 'error') {
+    launchConsoleState.phase = 'error'
+  } else if (message) {
+    launchConsoleState.phase = launchConsoleState.phase === 'idle' ? 'preparing' : launchConsoleState.phase
+  }
+
+  if (payload.progress) {
+    launchConsoleState.progress = payload.progress
+  } else if (payload.gameStarted || payload.gameExited || tone === 'error') {
+    launchConsoleState.progress = null
+  }
+
+  if (message) {
+    launchConsoleState.entries.push({
+      id: Date.now() + Math.random(),
+      message,
+      tone
+    })
+    if (launchConsoleState.entries.length > 240) {
+      launchConsoleState.entries = launchConsoleState.entries.slice(-240)
+    }
+  }
+
+  const eventPayload = {
+    ...payload,
+    tone,
+    phase: launchConsoleState.phase,
+    progress: payload.progress ?? launchConsoleState.progress
+  }
+
+  try {
+    mainWindow?.webContents.send('launcher:launchProgress', eventPayload)
+  } catch {}
+  try {
+    launchConsoleWindow?.webContents.send('launcher:launchProgress', eventPayload)
+  } catch {}
+
+  return eventPayload
+}
+
+async function loadRendererUrl(targetWindow, view = 'main') {
+  if (!targetWindow) return
+  const suffix = view === 'launch-console' ? '?view=launch-console' : ''
+
+  if (!app.isPackaged) {
+    const port = currentDevServerPort || 4173
+    const url = `http://localhost:${port}${suffix}`
+    try {
+      console.log('Loading renderer URL:', url)
+      await targetWindow.loadURL(url)
+      return
+    } catch (err) {
+      console.error('Failed to load dev URL, falling back to file:', err && err.message)
+      // fallthrough to try loading local file
+    }
+  }
+
+  const search = view === 'launch-console' ? 'view=launch-console' : ''
+  try {
+    await targetWindow.loadFile(path.join(__dirname, '../dist/index.html'), search ? { search } : {})
+  } catch (err) {
+    console.error('Failed to load local index.html:', err && err.message)
+  }
+}
+
+async function createLaunchConsoleWindow() {
+  if (launchConsoleWindow && !launchConsoleWindow.isDestroyed()) {
+    launchConsoleWindow.show()
+    launchConsoleWindow.focus()
+    return launchConsoleWindow
+  }
+
+  launchConsoleWindow = new BrowserWindow({
+    width: 980,
+    height: 700,
+    minWidth: 760,
+    minHeight: 520,
+    show: false,
+    backgroundColor: '#050505',
+    frame: false,
+    autoHideMenuBar: true,
+    resizable: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+
+  launchConsoleWindow.on('closed', () => {
+    launchConsoleWindow = null
+  })
+
+  await loadRendererUrl(launchConsoleWindow, 'launch-console')
+  launchConsoleWindow.once('ready-to-show', () => {
+    try {
+      launchConsoleWindow?.show()
+      launchConsoleWindow?.focus()
+    } catch {}
+  })
+
+  return launchConsoleWindow
+}
 
 async function ensureStorage() {
   await fs.mkdir(userData, { recursive: true })
@@ -157,7 +299,7 @@ async function downloadAndInstallJava(majorVersion, event = null, maxRetries = 3
   }
 
   console.log(`Downloading Java ${majorVersion}...`)
-  event?.sender.send('launcher:launchProgress', { message: `Загрузка Java ${majorVersion}...` })
+  broadcastLaunchProgress({ message: `Загрузка Java ${majorVersion}...`, phase: 'preparing' })
 
   let lastError = null
 
@@ -980,6 +1122,7 @@ async function installModrinthProject(projectId, options = {}) {
       javaPath: 'java',
       username: '',
       loader: modpackLoader,
+      fullscreenMode: 'global',
       modpackPath: modpackProfileDir
     }
 
@@ -1867,7 +2010,7 @@ async function getJavaCompatibilityRange(versionId) {
     if (versionData) {
       const requiredMajor = inferRequiredJavaMajorFromVersionData(versionData, versionId)
       const range = mergeJavaCompatibilityRanges({ minMajor: requiredMajor, maxMajor: null }, fallbackRange)
-      console.log(`Detected required Java version: ${formatJavaCompatibilityRange(range)} (${metadata.versionFile})`)
+      if (verboseLaunchLogging) console.log(`Detected required Java version: ${formatJavaCompatibilityRange(range)} (${metadata.versionFile})`)
       return range
     }
 
@@ -1880,12 +2023,12 @@ async function getJavaCompatibilityRange(versionId) {
       const jarJavaMajor = getRequiredJavaMajorFromJar(jarPath)
       if (jarJavaMajor !== null) {
         const range = mergeJavaCompatibilityRanges({ minMajor: jarJavaMajor, maxMajor: null }, fallbackRange)
-        console.log(`Detected required Java version from jar: ${formatJavaCompatibilityRange(range)} (${jarPath})`)
+        if (verboseLaunchLogging) console.log(`Detected required Java version from jar: ${formatJavaCompatibilityRange(range)} (${jarPath})`)
         return range
       }
     }
 
-    console.log(`Detected required Java version: ${formatJavaCompatibilityRange(fallbackRange)} (fallback by version id)`)
+    if (verboseLaunchLogging) console.log(`Detected required Java version: ${formatJavaCompatibilityRange(fallbackRange)} (fallback by version id)`)
     return fallbackRange
   } catch (error) {
     console.warn(`Failed to detect required Java version for ${versionId}:`, error.message)
@@ -1995,7 +2138,7 @@ async function findJavaPath(preferredPath, minMajor = 17, maxMajor = null, event
 
   if (matches.length === 0) {
     const requestedRange = formatJavaCompatibilityRange({ minMajor, maxMajor })
-    console.log(`Java ${requestedRange} not found, downloading Java ${minMajor}...`)
+    if (verboseLaunchLogging) console.log(`Java ${requestedRange} not found, downloading Java ${minMajor}...`)
     try {
       const downloadedPath = await downloadAndInstallJava(minMajor, event)
       return downloadedPath
@@ -2009,7 +2152,7 @@ async function findJavaPath(preferredPath, minMajor = 17, maxMajor = null, event
   const selected = matches.find((m) => m.major >= minMajor && (typeof maxMajor !== 'number' || m.major <= maxMajor))
   if (!selected) {
     const requestedRange = formatJavaCompatibilityRange({ minMajor, maxMajor })
-    console.log(`Java ${requestedRange} not found in matches, downloading Java ${minMajor}...`)
+    if (verboseLaunchLogging) console.log(`Java ${requestedRange} not found in matches, downloading Java ${minMajor}...`)
     try {
       const downloadedPath = await downloadAndInstallJava(minMajor, event)
       return downloadedPath
@@ -2017,13 +2160,20 @@ async function findJavaPath(preferredPath, minMajor = 17, maxMajor = null, event
       throw new Error(`Java ${requestedRange} не найдена и не удалось скачать Java ${minMajor}: ${error.message}`)
     }
   }
-  console.log(`Using Java ${selected.major} (${selected.candidate}) for range ${formatJavaCompatibilityRange({ minMajor, maxMajor })}`)
+  if (verboseLaunchLogging) console.log(`Using Java ${selected.major} (${selected.candidate}) for range ${formatJavaCompatibilityRange({ minMajor, maxMajor })}`)
   return selected.candidate
 }
 
 async function launchGame(profile, event) {
+  resetLaunchConsoleState()
+  broadcastLaunchProgress({ reset: true, message: `Подготовка запуска профиля "${profile.name || profile.versionId}"...`, phase: 'preparing' })
+  if (mainWindow) {
+    try { mainWindow.hide() } catch {}
+  }
+  await createLaunchConsoleWindow()
+
   const javaCompatibilityRange = await getJavaCompatibilityRange(profile.versionId)
-  event?.sender.send('launcher:launchProgress', { message: `Требуемая Java: ${formatJavaCompatibilityRange(javaCompatibilityRange)}` })
+  broadcastLaunchProgress({ message: `Требуемая Java: ${formatJavaCompatibilityRange(javaCompatibilityRange)}`, phase: 'preparing' })
   const javaPath = await findJavaPath(
     profile.javaPath || '',
     javaCompatibilityRange.minMajor,
@@ -2116,7 +2266,7 @@ async function launchGame(profile, event) {
       }
 
       if (skinUrl) {
-        console.log('Using custom skin URL for profile', profile.id, skinUrl)
+        if (verboseLaunchLogging) console.log('Using custom skin URL for profile', profile.id, skinUrl)
         const texturesObj = {
           timestamp: Date.now(),
           profileId: authorization.uuid,
@@ -2157,7 +2307,7 @@ async function launchGame(profile, event) {
   }
 
   if (profile.loader === 'fabric') {
-    event?.sender.send('launcher:launchProgress', { message: 'Установка Fabric...' })
+    broadcastLaunchProgress({ message: 'Установка Fabric...', phase: 'preparing' })
     try {
       const loaders = await getLoaderArtifactListFor(profile.versionId)
       const selected = profile.loaderVersion
@@ -2168,7 +2318,7 @@ async function launchGame(profile, event) {
       }
       const loaderVersion = selected.loader?.version || selected.version
       installedLoaderVersion = loaderVersion
-      console.log('Fabric: installing loader', loaderVersion, 'for', profile.versionId)
+      if (verboseLaunchLogging) console.log('Fabric: installing loader', loaderVersion, 'for', profile.versionId)
       
       try {
         const installedVersionId = await installFabric({
@@ -2182,14 +2332,14 @@ async function launchGame(profile, event) {
         installedLoaderId = null
       }
       
-      console.log('Fabric setup completed, version:', versionInfo.number)
+      if (verboseLaunchLogging) console.log('Fabric setup completed, version:', versionInfo.number)
     } catch (error) {
       console.error('Fabric install error:', error)
-      event?.sender.send('launcher:launchProgress', { message: `Ошибка установки Fabric: ${error.message}` })
+      broadcastLaunchProgress({ message: `Ошибка установки Fabric: ${error.message}`, tone: 'error', phase: 'error' })
       throw error
     }
   } else if (profile.loader === 'forge') {
-    event?.sender.send('launcher:launchProgress', { message: 'Установка Forge...' })
+    broadcastLaunchProgress({ message: 'Установка Forge...', phase: 'preparing' })
     try {
       const result = await getForgeVersionList({ minecraft: profile.versionId })
       const forgeVersions = Array.isArray(result)
@@ -2215,7 +2365,7 @@ async function launchGame(profile, event) {
       }
 
       const artifactName = computeForgeArtifact(selected)
-      console.log('Forge: installing', artifactName, 'for', profile.versionId)
+      if (verboseLaunchLogging) console.log('Forge: installing', artifactName, 'for', profile.versionId)
 
       try {
         const installedVersionId = await installForge(selected, root, { mcversion: profile.versionId })
@@ -2225,14 +2375,14 @@ async function launchGame(profile, event) {
           const expectedForgeJar = path.join(root, 'libraries', 'net', 'minecraftforge', 'forge', artifactName, `forge-${artifactName}-installer.jar`)
           if (fsSync.existsSync(expectedForgeJar)) {
             installedForgeInstallerJar = expectedForgeJar
-            console.log('Found forge installer jar at expected path:', installedForgeInstallerJar)
+            if (verboseLaunchLogging) console.log('Found forge installer jar at expected path:', installedForgeInstallerJar)
           } else {
             // Fallback to searching the libraries tree
             installedForgeInstallerJar = await findForgeInstallerJar(root)
-            console.log('Found forge installer jar via search:', installedForgeInstallerJar)
+            if (verboseLaunchLogging) console.log('Found forge installer jar via search:', installedForgeInstallerJar)
           }
           if (installedForgeInstallerJar) {
-            console.log('Forge installer jar exists on disk:', fsSync.existsSync(installedForgeInstallerJar))
+            if (verboseLaunchLogging) console.log('Forge installer jar exists on disk:', fsSync.existsSync(installedForgeInstallerJar))
           }
         } catch (err) {
           console.warn('Failed to locate forge installer jar:', err && (err.stack || err.message))
@@ -2242,14 +2392,14 @@ async function launchGame(profile, event) {
         installedLoaderId = null
       }
       
-      console.log('Forge setup completed, version:', versionInfo.number)
+      if (verboseLaunchLogging) console.log('Forge setup completed, version:', versionInfo.number)
     } catch (error) {
       console.error('Forge install error:', error)
-      event?.sender.send('launcher:launchProgress', { message: `Ошибка установки Forge: ${error.message}` })
+      broadcastLaunchProgress({ message: `Ошибка установки Forge: ${error.message}`, tone: 'error', phase: 'error' })
       throw error
     }
   } else if (profile.loader === 'neoforge') {
-    event?.sender.send('launcher:launchProgress', { message: 'Установка NeoForge...' })
+    broadcastLaunchProgress({ message: 'Установка NeoForge...', phase: 'preparing' })
     try {
       const result = await getNeoForgedVersionsFromMaven(profile.versionId)
       const neoVersions = Array.isArray(result)
@@ -2262,11 +2412,11 @@ async function launchGame(profile, event) {
       
       for (const selected of stableVersions) {
         installedLoaderVersion = selected.version
-        console.log('NeoForge: trying to install', selected.version, 'for', profile.versionId)
+        if (verboseLaunchLogging) console.log('NeoForge: trying to install', selected.version, 'for', profile.versionId)
         try {
           const installedVersionId = await installNeoForged('neoforge', selected.version, root, { mcversion: profile.versionId })
           installedLoaderId = installedVersionId || `neoforge-${selected.version}`
-          console.log('NeoForge setup completed, version:', installedLoaderId)
+          if (verboseLaunchLogging) console.log('NeoForge setup completed, version:', installedLoaderId)
           break
         } catch (e) {
           console.warn('NeoForge install failed for', selected.version, ':', e && (e.stack || e.message), 'trying next version')
@@ -2278,11 +2428,11 @@ async function launchGame(profile, event) {
       }
     } catch (error) {
       console.error('NeoForge install error:', error)
-      event?.sender.send('launcher:launchProgress', { message: `Ошибка установки NeoForge: ${error.message}` })
+      broadcastLaunchProgress({ message: `Ошибка установки NeoForge: ${error.message}`, tone: 'error', phase: 'error' })
       throw error
     }
   } else if (profile.loader === 'quilt') {
-    event?.sender.send('launcher:launchProgress', { message: 'Установка Quilt...' })
+    broadcastLaunchProgress({ message: 'Установка Quilt...', phase: 'preparing' })
     try {
       const quiltVersions = await getQuiltLoaderVersionsByMinecraft({ minecraftVersion: profile.versionId })
       const list = Array.isArray(quiltVersions) ? quiltVersions : Object.values(quiltVersions || {})
@@ -2297,7 +2447,7 @@ async function launchGame(profile, event) {
       if (!loaderVersion) {
         throw new Error(`No valid Quilt loader version found for Minecraft ${profile.versionId}`)
       }
-      console.log('Quilt: installing', loaderVersion, 'for', profile.versionId)
+      if (verboseLaunchLogging) console.log('Quilt: installing', loaderVersion, 'for', profile.versionId)
       
       try {
         const installedVersionId = await installQuiltVersion({
@@ -2317,10 +2467,10 @@ async function launchGame(profile, event) {
         installedLoaderId = `quilt-${loaderVersion}`
       }
       
-      console.log('Quilt setup completed, version:', versionInfo.number)
+      if (verboseLaunchLogging) console.log('Quilt setup completed, version:', versionInfo.number)
     } catch (error) {
       console.error('Quilt install error:', error)
-      event?.sender.send('launcher:launchProgress', { message: `Ошибка установки Quilt: ${error.message}` })
+      broadcastLaunchProgress({ message: `Ошибка установки Quilt: ${error.message}`, tone: 'error', phase: 'error' })
       throw error
     }
   }
@@ -2375,7 +2525,7 @@ async function launchGame(profile, event) {
                 }
               }
             })
-            console.log('Added launchwrapper to Quilt libraries for Mixin service')
+            if (verboseLaunchLogging) console.log('Added launchwrapper to Quilt libraries for Mixin service')
           }
           
           // Only write if there were changes
@@ -2383,9 +2533,9 @@ async function launchGame(profile, event) {
           const filteredJsonString = JSON.stringify(filtered)
           if (originalJsonString !== filteredJsonString) {
             await fs.writeFile(loaderJsonPath, JSON.stringify(filtered, null, 2), 'utf-8')
-            console.log(`Filtered Quilt libraries: ${json.libraries.length} -> ${filtered.libraries.length}`)
+            if (verboseLaunchLogging) console.log(`Filtered Quilt libraries: ${json.libraries.length} -> ${filtered.libraries.length}`)
             if (filtered.arguments?.jvm) {
-              console.log(`Filtered Quilt JVM args: ${json.arguments?.jvm?.length || 0} -> ${filtered.arguments.jvm.length}`)
+              if (verboseLaunchLogging) console.log(`Filtered Quilt JVM args: ${json.arguments?.jvm?.length || 0} -> ${filtered.arguments.jvm.length}`)
             }
           }
         }
@@ -2421,23 +2571,27 @@ async function launchGame(profile, event) {
     const ONE_GB = 1024 * 1024 * 1024
     const totalGB = Math.max(1, Math.floor(os.totalmem() / ONE_GB))
 
-    let availableGB = totalGB
+    let freeGB = totalGB
     try {
       const freeMem = os.freemem()
-      availableGB = Math.max(1, Math.floor(freeMem / ONE_GB))
+      freeGB = Math.max(1, Math.floor(freeMem / ONE_GB))
     } catch {}
+
+    const hardMaxAllowed = Math.max(2, totalGB - Math.ceil(reserveGB))
 
     // Handle 'auto' - calculate based on system memory
     let requestedGB = parseMemoryGB(requestedValue)
     if (requestedValue === 'auto' || requestedGB === null) {
-      // Auto: use 50% of available memory, minimum 2GB, maximum 4GB (to avoid memory issues)
-      requestedGB = Math.max(2, Math.min(4, Math.floor(availableGB * 0.5)))
-      console.log('Auto RAM calculation: using', requestedGB, 'GB based on', availableGB, 'GB available')
+      // Auto should stay conservative, but not collapse to 2G just because
+      // Windows reports little "free" RAM while much more memory is reclaimable.
+      const autoFromFree = Math.floor(freeGB * 0.5)
+      const autoFromTotal = Math.floor(hardMaxAllowed * 0.75)
+      requestedGB = Math.max(2, Math.min(4, hardMaxAllowed, Math.max(autoFromFree, autoFromTotal)))
+      if (verboseLaunchLogging) console.log('Auto RAM calculation: using', requestedGB, 'GB based on', { freeGB, totalGB, hardMaxAllowed })
     }
 
-    const maxAllowed = Math.max(2, Math.min(totalGB - Math.ceil(reserveGB), availableGB - 2))
-
-    console.log('RAM calculation:', { totalGB, availableGB, requestedGB, maxAllowed, reserveGB, requestedValue })
+    const maxAllowed = hardMaxAllowed
+    if (verboseLaunchLogging) console.log('RAM calculation:', { totalGB, freeGB, requestedGB, maxAllowed, reserveGB, requestedValue })
 
     if (requestedGB <= maxAllowed && requestedGB >= 2) {
       return `${requestedGB}G`
@@ -2463,18 +2617,18 @@ async function launchGame(profile, event) {
 
   // For mod loaders, always use loader version directory if available
   const usesModLoader = profile.loader === 'forge' || profile.loader === 'quilt' || profile.loader === 'fabric' || profile.loader === 'neoforge'
-  console.log(`[Launch] usesModLoader=${usesModLoader}, profile.loader=${profile.loader}, installedLoaderId=${installedLoaderId}`)
+  if (verboseLaunchLogging) console.log(`[Launch] usesModLoader=${usesModLoader}, profile.loader=${profile.loader}, installedLoaderId=${installedLoaderId}`)
   const versionDirectory = (installedLoaderId && usesModLoader) 
     ? path.join(versionsPath, installedLoaderId) 
     : path.join(versionsPath, profile.versionId)
-  console.log(`[Launch] versionDirectory=${versionDirectory}`)
+  if (verboseLaunchLogging) console.log(`[Launch] versionDirectory=${versionDirectory}`)
   
   // Check if loader version directory exists
   if (installedLoaderId) {
     const loaderDirExists = fsSync.existsSync(path.join(versionsPath, installedLoaderId))
-    console.log(`[Launch] Loader directory exists: ${loaderDirExists}`)
+    if (verboseLaunchLogging) console.log(`[Launch] Loader directory exists: ${loaderDirExists}`)
     if (!loaderDirExists) {
-      console.log(`[Launch] WARNING: Loader directory does not exist! Falling back to base version.`)
+      if (verboseLaunchLogging) console.log(`[Launch] WARNING: Loader directory does not exist! Falling back to base version.`)
       installedLoaderId = null
     }
   }
@@ -2509,8 +2663,8 @@ async function launchGame(profile, event) {
   // Use modpack-specific directory for gameDir if this is a modpack profile
   if (profile.modpackPath) {
     const modpackGameDir = profile.modpackPath
-    console.log(`[Launch] Using main minecraft root for libraries: ${root}`)
-    console.log(`[Launch] Using modpack game directory: ${modpackGameDir}`)
+    if (verboseLaunchLogging) console.log(`[Launch] Using main minecraft root for libraries: ${root}`)
+    if (verboseLaunchLogging) console.log(`[Launch] Using modpack game directory: ${modpackGameDir}`)
     options.root = root  // Keep main minecraft for libraries/versions
     // Use overrides to set game directory - this sets --gameDir in launch args
     options.overrides.gameDirectory = modpackGameDir
@@ -2536,15 +2690,22 @@ async function launchGame(profile, event) {
     }
   }
 
-  if (launcherSettings.fullscreen) {
+  const profileFullscreenMode = profile.fullscreenMode || 'global'
+  const shouldLaunchFullscreen = profileFullscreenMode === 'on'
+    ? true
+    : profileFullscreenMode === 'off'
+      ? false
+      : Boolean(launcherSettings.fullscreen)
+
+  if (shouldLaunchFullscreen) {
     options.customLaunchArgs = options.customLaunchArgs || []
     if (!options.customLaunchArgs.some((arg) => arg === '--fullscreen')) {
       options.customLaunchArgs.push('--fullscreen')
     }
   }
 
-  console.log('RAM debug:', { safeRam, memory: options.memory, customArgs: options.customArgs.filter(a => typeof a === 'string' && a.startsWith('-Xm')) })
-  console.log('customLaunchArgs:', options.customLaunchArgs)
+  if (verboseLaunchLogging) console.log('RAM debug:', { safeRam, memory: options.memory, customArgs: options.customArgs.filter(a => typeof a === 'string' && a.startsWith('-Xm')) })
+  if (verboseLaunchLogging) console.log('customLaunchArgs:', options.customLaunchArgs)
 
   if (installedForgeInstallerJar) options.forge = installedForgeInstallerJar
 
@@ -2572,7 +2733,7 @@ async function launchGame(profile, event) {
     // Disable FML properties that may interfere with Quilt
     options.customArgs.push('-Dfml.ignorePatchDiscrepancies=false')
     options.customArgs.push('-Dfml.ignoreInvalidMinecraftCertificates=false')
-    console.log('Quilt custom args:', options.customArgs)
+    if (verboseLaunchLogging) console.log('Quilt custom args:', options.customArgs)
   }
 
   if (profile.loader === 'neoforge') {
@@ -2595,7 +2756,7 @@ async function launchGame(profile, event) {
     options.customArgs.push('--add-opens', 'java.base/java.util.concurrent.atomic=ALL-UNNAMED')
     options.customArgs.push('-Dfml.ignorePatchDiscrepancies=false')
     options.customArgs.push('-Dfml.ignoreInvalidMinecraftCertificates=false')
-    console.log('NeoForge custom args:', options.customArgs)
+    if (verboseLaunchLogging) console.log('NeoForge custom args:', options.customArgs)
   }
 
   // Add address space fixes for all mod loaders (Forge, Quilt, NeoForge, Fabric)
@@ -2608,17 +2769,17 @@ async function launchGame(profile, event) {
     if (!options.customArgs.some(a => typeof a === 'string' && a.includes('UseCompressedOops'))) {
       options.customArgs.push('-XX:-UseCompressedOops')
     }
-    console.log('Mod loader address space fix applied')
+    if (verboseLaunchLogging) console.log('Mod loader address space fix applied')
   }
 
   const requestedGB = profile.ram === 'auto' ? -1 : parseMemoryGB(profile.ram)
   if (parseMemoryGB(safeRam) < (requestedGB > 0 ? requestedGB : 999)) {
-    event?.sender.send('launcher:launchProgress', { message: `Память скорректирована до ${safeRam}` })
+    broadcastLaunchProgress({ message: `Память скорректирована до ${safeRam}`, phase: 'preparing' })
   }
 
   launcher.on('debug', (data) => {
-    console.debug('Launcher debug:', data)
-    event?.sender.send('launcher:launchProgress', { message: data.toString() })
+    if (verboseLaunchLogging) console.debug('Launcher debug:', data)
+    broadcastLaunchProgress({ message: data.toString(), stream: 'log', phase: 'preparing' })
   })
 
   launcher.on('progress', (data) => {
@@ -2647,39 +2808,45 @@ async function launchGame(profile, event) {
       message = String(data)
     }
 
-    event?.sender.send('launcher:launchProgress', { message, progress })
+    broadcastLaunchProgress({ message, progress, phase: 'preparing' })
   })
 
   launcher.on('data', (data) => {
-    console.log('Launcher data:', data.toString())
+    const text = data.toString()
+    if (verboseLaunchLogging) console.log('Launcher data:', text)
+    broadcastLaunchProgress({ message: text, stream: 'log', phase: 'preparing' })
   })
 
   launcher.on('close', (code) => {
     if (code !== 0) {
-      event?.sender.send('launcher:launchProgress', { message: `Minecraft завершился с кодом ${code}` })
+      broadcastLaunchProgress({ message: `Minecraft завершился с кодом ${code}`, tone: 'error', phase: 'error' })
     }
   })
 
   try {
-    console.log('Launching with options.version:', versionOption)
-    console.log('RAM debug:', { safeRam, memory: options.memory, customArgs: options.customArgs.filter(a => a.startsWith('-Xm')) })
-    console.log('installedLoaderId:', installedLoaderId)
-    console.log('installedLoaderVersion:', installedLoaderVersion)
-    console.log('installedForgeInstallerJar:', installedForgeInstallerJar)
-    console.log('Final launcher options (partial):', {
-      version: options.version,
-      overrides: options.overrides,
-      forge: options.forge,
-      javaPath: options.javaPath
-    })
-    try {
-      console.log('authorization preview:', {
-        uuid: authorization && authorization.uuid,
-        name: authorization && authorization.name,
-        user_properties_preview: authorization && (typeof authorization.user_properties === 'string'
-          ? authorization.user_properties.slice(0, 200)
-          : JSON.stringify(authorization.user_properties).slice(0, 200))
+    if (verboseLaunchLogging) {
+      console.log('Launching with options.version:', versionOption)
+      console.log('RAM debug:', { safeRam, memory: options.memory, customArgs: options.customArgs.filter(a => a.startsWith('-Xm')) })
+      console.log('installedLoaderId:', installedLoaderId)
+      console.log('installedLoaderVersion:', installedLoaderVersion)
+      console.log('installedForgeInstallerJar:', installedForgeInstallerJar)
+      console.log('Final launcher options (partial):', {
+        version: options.version,
+        overrides: options.overrides,
+        forge: options.forge,
+        javaPath: options.javaPath
       })
+    }
+    try {
+      if (verboseLaunchLogging) {
+        console.log('authorization preview:', {
+          uuid: authorization && authorization.uuid,
+          name: authorization && authorization.name,
+          user_properties_preview: authorization && (typeof authorization.user_properties === 'string'
+            ? authorization.user_properties.slice(0, 200)
+            : JSON.stringify(authorization.user_properties).slice(0, 200))
+        })
+      }
     } catch (e) {
       // ignore logging errors
     }
@@ -2688,18 +2855,25 @@ async function launchGame(profile, event) {
       throw new Error('Не удалось запустить Minecraft. Проверьте Java и версию.')
     }
 
-    // Close launcher window when Minecraft starts successfully
-    if (mainWindow) {
-      mainWindow.hide()
-    }
+    broadcastLaunchProgress({
+      message: 'Окно Minecraft открыто. Передаю управление игре...',
+      gameStarted: true,
+      phase: 'started'
+    })
+
+    setTimeout(() => {
+      try {
+        launchConsoleWindow?.close()
+      } catch {}
+    }, 220)
 
     child.on('error', (error) => {
       console.error('Launch error', error)
-      event?.sender.send('launcher:launchProgress', { message: `Ошибка запуска: ${error.message}` })
+      broadcastLaunchProgress({ message: `Ошибка запуска: ${error.message}`, tone: 'error', phase: 'error' })
     })
 
     child.on('close', (code) => {
-      console.log('Minecraft closed with code:', code)
+      if (verboseLaunchLogging) console.log('Minecraft closed with code:', code)
 
       // Show launcher window again when Minecraft closes
       if (mainWindow) {
@@ -2707,26 +2881,34 @@ async function launchGame(profile, event) {
         mainWindow.focus()
       }
 
+      try {
+        launchConsoleWindow?.close()
+      } catch {}
+
       // Send exit status to renderer
       const exitMessage = code === 0
         ? 'Игра завершена успешно'
         : `Игра завершена с кодом ${code}`
 
-      event?.sender.send('launcher:launchProgress', { message: exitMessage, gameExited: true })
+      broadcastLaunchProgress({ message: exitMessage, gameExited: true, phase: 'idle', tone: code === 0 ? 'success' : 'error' })
     })
 
     return true
   } catch (launchError) {
     console.error('Launcher launch error:', launchError)
+    if (mainWindow) {
+      try {
+        mainWindow.show()
+        mainWindow.focus()
+      } catch {}
+    }
+    broadcastLaunchProgress({ message: `Не удалось запустить Minecraft: ${launchError.message}`, tone: 'error', phase: 'error' })
     throw new Error(`Не удалось запустить Minecraft: ${launchError.message}`)
   }
 }
 
-let mainWindow = null
-
 async function createWindow() {
   // Storage and skin server are already initialized in app.whenReady
-
   const win = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -2747,41 +2929,56 @@ async function createWindow() {
   try { Menu.setApplicationMenu(null) } catch (e) {}
 
   // Keep reference to window for IPC handlers
+
+  console.log('createWindow: currentDevServerPort=', currentDevServerPort)
   mainWindow = win
 
-  if (!app.isPackaged) {
-    // Try to automatically detect which port Vite is serving on (fallback range 4173..4182)
-    async function findDevServerPort() {
-      const ports = []
-      for (let p = 4173; p <= 4182; p++) ports.push(p)
-      for (const p of ports) {
-        try {
-          const url = `http://localhost:${p}`
-          const res = await axios.get(url, { timeout: 800 })
-          if (res.status && res.status >= 200) return p
-        } catch (e) {
-          // ignore and try next
-        }
-      }
-      return null
-    }
-
-    const devPort = await findDevServerPort()
-    if (devPort) {
-      win.loadURL(`http://localhost:${devPort}`)
-    } else {
-      // fallback to hardcoded port
-      win.loadURL('http://localhost:4173')
-    }
-  } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'))
+  // Diagnostic listeners: report renderer load status
+  try {
+    win.webContents.on('did-finish-load', () => {
+      console.log('Renderer finished load (did-finish-load)')
+    })
+    win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      console.error('Renderer did-fail-load:', { errorCode, errorDescription, validatedURL, isMainFrame })
+    })
+  } catch (e) {
+    console.warn('Failed to attach webContents listeners:', e && e.message)
   }
 
-  win.once('ready-to-show', () => win.show())
+  await loadRendererUrl(win, 'main')
+
+  // Fallback: if 'ready-to-show' does not fire within a short timeout, show window anyway
+  const showTimeout = setTimeout(() => {
+    try {
+      if (!win.isDestroyed() && !win.isVisible()) {
+        console.warn('ready-to-show did not fire: showing window by fallback timeout')
+        win.show()
+      }
+    } catch {}
+  }, 4000)
+
+  win.once('ready-to-show', () => {
+    clearTimeout(showTimeout)
+    try { win.show() } catch {}
+  })
 
   // Forward maximize/unmaximize state to renderer for UI updates
   win.on('maximize', () => win.webContents.send('window:maximize-change', true))
   win.on('unmaximize', () => win.webContents.send('window:maximize-change', false))
+}
+
+async function findDevServerPort() {
+  const ports = []
+  for (let p = 4173; p <= 4182; p++) ports.push(p)
+  for (const p of ports) {
+    try {
+      const res = await axios.get(`http://localhost:${p}`, { timeout: 800 })
+      if (res.status && res.status >= 200) return p
+    } catch {
+      // ignore and try next
+    }
+  }
+  return null
 }
 
 app.whenReady().then(async () => {
@@ -2801,6 +2998,9 @@ app.whenReady().then(async () => {
   // Initialize storage and skin server before creating window
   ensureStorage()
   await startSkinServer()
+  if (!app.isPackaged) {
+    currentDevServerPort = await findDevServerPort() || 4173
+  }
   createWindow()
 })
 
@@ -2811,6 +3011,10 @@ ipcMain.handle('launcher:fetchVersionManifest', async () => {
 
 ipcMain.handle('launcher:getInstalledVersions', async () => {
   return await getInstalledVersions()
+})
+
+ipcMain.handle('launcher:getLaunchConsoleState', async () => {
+  return launchConsoleState
 })
 
 ipcMain.handle('launcher:installVersion', async (event, versionId) => {
