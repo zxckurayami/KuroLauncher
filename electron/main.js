@@ -1,9 +1,11 @@
-const { app, BrowserWindow, ipcMain, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, Menu, shell } = require('electron')
 const path = require('path')
 const fs = require('fs').promises
 const fsSync = require('fs')
 const os = require('os')
 const crypto = require('crypto')
+const { execFile } = require('child_process')
+const { promisify } = require('util')
 const { finished } = require('stream/promises')
 const axios = require('axios')
 const { Client, Authenticator } = require('minecraft-launcher-core')
@@ -11,151 +13,46 @@ const { installFabric, getLoaderArtifactListFor, getForgeVersionList, installFor
 const AdmZip = require('adm-zip')
 const http = require('http')
 const url = require('url')
+const execFileAsync = promisify(execFile)
 
 // Paths will be initialized when app is ready
 let userData, minecraftPath, versionsPath, profilesPath, settingsPath, authPath, modsPath, shaderpacksPath, resourcepacksPath, modpacksPath, modrinthCachePath
-const defaultLauncherSettings = { theme: 'dark', javaPath: 'java', ram: 'auto', fullscreen: false }
+const defaultLauncherSettings = {
+  theme: 'dark',
+  javaPath: 'java',
+  ram: 'auto',
+  accent: 'red',
+  fullscreen: false,
+  kuroBoost: true,
+  kuroBoostPreset: 'ai',
+  profileName: '',
+  profileStatus: '',
+  avatarDataUrl: ''
+}
 const verboseLaunchLogging = process.env.KURO_DEBUG_LAUNCH === '1'
 let mainWindow = null
-let launchConsoleWindow = null
 let currentDevServerPort = null
-let launchConsoleState = {
-  phase: 'idle',
-  progress: null,
-  entries: []
-}
-
-function inferLaunchTone(message) {
-  const text = String(message || '')
-  if (/ошибка|exception|error|failed/i.test(text)) return 'error'
-  if (/открыто|запущен|запущена|успешно|готово/i.test(text)) return 'success'
-  return 'info'
-}
-
-function resetLaunchConsoleState() {
-  launchConsoleState = {
-    phase: 'idle',
-    progress: null,
-    entries: []
-  }
-}
+let minecraftProcessActive = false
+let mainWindowShownAt = 0
+const STARTUP_CLOSE_GUARD_MS = 1500
 
 function broadcastLaunchProgress(payload = {}) {
-  if (payload.reset) {
-    resetLaunchConsoleState()
-  }
-
-  const message = typeof payload.message === 'string' ? payload.message.trim() : ''
-  const tone = payload.tone || inferLaunchTone(message)
-
-  if (payload.phase) {
-    launchConsoleState.phase = payload.phase
-  } else if (payload.gameStarted) {
-    launchConsoleState.phase = 'started'
-  } else if (payload.gameExited) {
-    launchConsoleState.phase = 'idle'
-  } else if (tone === 'error') {
-    launchConsoleState.phase = 'error'
-  } else if (message) {
-    launchConsoleState.phase = launchConsoleState.phase === 'idle' ? 'preparing' : launchConsoleState.phase
-  }
-
-  if (payload.progress) {
-    launchConsoleState.progress = payload.progress
-  } else if (payload.gameStarted || payload.gameExited || tone === 'error') {
-    launchConsoleState.progress = null
-  }
-
-  if (message) {
-    launchConsoleState.entries.push({
-      id: Date.now() + Math.random(),
-      message,
-      tone
-    })
-    if (launchConsoleState.entries.length > 240) {
-      launchConsoleState.entries = launchConsoleState.entries.slice(-240)
-    }
-  }
-
-  const eventPayload = {
-    ...payload,
-    tone,
-    phase: launchConsoleState.phase,
-    progress: payload.progress ?? launchConsoleState.progress
-  }
-
   try {
-    mainWindow?.webContents.send('launcher:launchProgress', eventPayload)
+    mainWindow?.webContents.send('launcher:launchProgress', payload)
   } catch {}
-  try {
-    launchConsoleWindow?.webContents.send('launcher:launchProgress', eventPayload)
-  } catch {}
-
-  return eventPayload
+  return payload
 }
 
-async function loadRendererUrl(targetWindow, view = 'main') {
+async function loadRendererUrl(targetWindow) {
   if (!targetWindow) return
-  const suffix = view === 'launch-console' ? '?view=launch-console' : ''
 
   if (!app.isPackaged) {
     const port = currentDevServerPort || 4173
-    const url = `http://localhost:${port}${suffix}`
-    try {
-      console.log('Loading renderer URL:', url)
-      await targetWindow.loadURL(url)
-      return
-    } catch (err) {
-      console.error('Failed to load dev URL, falling back to file:', err && err.message)
-      // fallthrough to try loading local file
-    }
+    await targetWindow.loadURL(`http://localhost:${port}`)
+    return
   }
 
-  const search = view === 'launch-console' ? 'view=launch-console' : ''
-  try {
-    await targetWindow.loadFile(path.join(__dirname, '../dist/index.html'), search ? { search } : {})
-  } catch (err) {
-    console.error('Failed to load local index.html:', err && err.message)
-  }
-}
-
-async function createLaunchConsoleWindow() {
-  if (launchConsoleWindow && !launchConsoleWindow.isDestroyed()) {
-    launchConsoleWindow.show()
-    launchConsoleWindow.focus()
-    return launchConsoleWindow
-  }
-
-  launchConsoleWindow = new BrowserWindow({
-    width: 980,
-    height: 700,
-    minWidth: 760,
-    minHeight: 520,
-    show: false,
-    backgroundColor: '#050505',
-    frame: false,
-    autoHideMenuBar: true,
-    resizable: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  })
-
-  launchConsoleWindow.on('closed', () => {
-    launchConsoleWindow = null
-  })
-
-  await loadRendererUrl(launchConsoleWindow, 'launch-console')
-  launchConsoleWindow.once('ready-to-show', () => {
-    try {
-      launchConsoleWindow?.show()
-      launchConsoleWindow?.focus()
-    } catch {}
-  })
-
-  return launchConsoleWindow
+  await targetWindow.loadFile(path.join(__dirname, '../dist/index.html'))
 }
 
 async function ensureStorage() {
@@ -204,6 +101,21 @@ ipcMain.handle('launcher:getSkinUrl', async (event, profileId) => {
     return null
   } catch (e) {
     return null
+  }
+})
+
+ipcMain.handle('launcher:openExternal', async (_event, targetUrl) => {
+  try {
+    const parsed = new URL(String(targetUrl || ''))
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { ok: false, error: 'unsupported_protocol' }
+    }
+
+    await shell.openExternal(parsed.toString())
+    return { ok: true }
+  } catch (e) {
+    console.error('Failed to open external link:', e && e.message)
+    return { ok: false, error: e && e.message }
   }
 })
 
@@ -269,6 +181,153 @@ async function readJson(filePath, fallback) {
     return JSON.parse(text)
   } catch {
     return fallback
+  }
+}
+
+async function summarizeLatestCrashReport(gameDirectory) {
+  try {
+    const crashDir = path.join(gameDirectory, 'crash-reports')
+    if (!fsSync.existsSync(crashDir)) return null
+
+    const reports = await fs.readdir(crashDir, { withFileTypes: true })
+    const latest = reports
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.txt'))
+      .map((entry) => {
+        const fullPath = path.join(crashDir, entry.name)
+        const stat = fsSync.statSync(fullPath)
+        return { fullPath, mtimeMs: stat.mtimeMs || 0 }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
+
+    if (!latest) return null
+
+    const content = await fs.readFile(latest.fullPath, 'utf-8')
+    const lines = content.split(/\r?\n/)
+    const descriptionLine = lines.find((line) => line.startsWith('Description:'))
+    const exceptionLine = lines.find((line) => /^\w[\w.$]+(?:Exception|Error):/.test(line.trim()))
+    const causedByLine = lines.find((line) => line.trim().startsWith('Caused by:'))
+
+    const details = [
+      descriptionLine ? descriptionLine.replace(/^Description:\s*/, '').trim() : '',
+      causedByLine ? causedByLine.trim() : '',
+      exceptionLine ? exceptionLine.trim() : ''
+    ].filter(Boolean)
+
+    return {
+      path: latest.fullPath,
+      message: details.length > 0 ? [...new Set(details)].join(' | ') : path.basename(latest.fullPath)
+    }
+  } catch (error) {
+    console.warn('Failed to summarize crash report:', error && error.message)
+    return null
+  }
+}
+
+function getKuroLaunchLogPath(gameDirectory) {
+  return path.join(gameDirectory, 'logs', 'kuro-launcher.log')
+}
+
+function redactLaunchLogText(value, authorization = null) {
+  let text = String(value ?? '')
+  const secrets = [
+    authorization?.access_token,
+    authorization?.client_token,
+    authorization?.meta?.clientId
+  ].filter((secret) => typeof secret === 'string' && secret.length > 4)
+
+  for (const secret of secrets) {
+    text = text.split(secret).join('<redacted>')
+  }
+
+  text = text.replace(/(--accessToken(?:=|\s+))\S+/g, '$1<redacted>')
+  text = text.replace(/(--clientId(?:=|\s+))\S+/g, '$1<redacted>')
+  text = text.replace(/("access_token"\s*:\s*")([^"]+)(")/g, '$1<redacted>$3')
+  text = text.replace(/("client_token"\s*:\s*")([^"]+)(")/g, '$1<redacted>$3')
+  return text
+}
+
+async function beginLaunchLog(gameDirectory, metadata = {}, authorization = null) {
+  try {
+    const logPath = getKuroLaunchLogPath(gameDirectory)
+    await fs.mkdir(path.dirname(logPath), { recursive: true })
+    const header = [
+      '',
+      '============================================================',
+      `KuroLauncher launch ${new Date().toISOString()}`,
+      redactLaunchLogText(JSON.stringify(metadata, null, 2), authorization),
+      '============================================================',
+      ''
+    ].join('\n')
+    await fs.writeFile(logPath, header, 'utf-8')
+    return logPath
+  } catch (error) {
+    console.warn('Failed to create KuroLauncher launch log:', error && error.message)
+    return null
+  }
+}
+
+function appendLaunchLog(logPath, stream, message, authorization = null) {
+  if (!logPath) return
+  const text = redactLaunchLogText(message, authorization)
+  const lines = text.split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+  if (lines.length === 0) return
+
+  const payload = lines
+    .map((line) => `[${new Date().toISOString()}] [${stream}] ${line}`)
+    .join('\n') + '\n'
+
+  try {
+    fsSync.appendFileSync(logPath, payload, 'utf-8')
+  } catch (error) {
+    if (verboseLaunchLogging) console.warn('Failed to append KuroLauncher launch log:', error && error.message)
+  }
+}
+
+async function summarizeLatestKuroLaunchLog(gameDirectory) {
+  try {
+    const logPath = getKuroLaunchLogPath(gameDirectory)
+    if (!fsSync.existsSync(logPath)) return null
+
+    const content = await fs.readFile(logPath, 'utf-8')
+    const rawLines = content.split(/\r?\n/)
+    const eventLines = rawLines
+      .map((line) => {
+        const match = line.match(/^\[[^\]]+\]\s+\[([^\]]+)\]\s+(.*)$/)
+        return match ? { stream: match[1], text: match[2] } : { stream: 'raw', text: line }
+      })
+      .filter((entry) => entry.text && entry.text.trim())
+      .filter((entry) => entry.stream !== 'arguments')
+      .filter((entry) => !(entry.stream === 'debug' && entry.text.includes('[MCLC]: Launching with arguments')))
+
+    const lines = eventLines
+      .map((entry) => entry.text.trim())
+      .filter(Boolean)
+
+    const nonFatalNoise = (line) =>
+      /Failed to update resource pack|Error while downloading|SocketTimeoutException: Connect timed out/i.test(line)
+
+    const fatal = lines.filter((line) =>
+      !nonFatalNoise(line) &&
+      /(?:Exception in thread|[A-Za-z0-9_.$]+(?:Exception|Error):|Caused by:|Could not find or load main class|NoClassDefFoundError|ClassNotFoundException|FindException|ResolutionException)/i.test(line)
+    )
+
+    const important = lines.filter((line) =>
+      !nonFatalNoise(line) &&
+      /(?:\bError:|Exception|Caused by:|Could not|Unable to|Failed to|Duplicate|NoClassDefFoundError|ClassNotFoundException|FindException|ResolutionException)/i.test(line)
+    )
+
+    const selected = (fatal.length > 0 ? fatal : important.length > 0 ? important : lines).slice(-4)
+    if (selected.length === 0) return null
+
+    return {
+      path: logPath,
+      message: selected.join(' | ')
+    }
+  } catch (error) {
+    console.warn('Failed to summarize KuroLauncher launch log:', error && error.message)
+    return null
   }
 }
 
@@ -437,6 +496,128 @@ async function saveJson(filePath, value) {
   await fs.writeFile(filePath, JSON.stringify(value, null, 2), 'utf-8')
 }
 
+function normalizeArchiveRelativePath(value) {
+  if (typeof value !== 'string') return null
+  const raw = value.replace(/\\/g, '/').trim()
+  if (!raw || raw.includes('\0') || raw.startsWith('/') || /^[a-zA-Z]:/.test(raw)) return null
+
+  const normalized = path.posix.normalize(raw).replace(/^\/+/, '')
+  if (!normalized || normalized === '.' || normalized.startsWith('../') || normalized === '..') return null
+  return normalized
+}
+
+function safeJoinInside(parentPath, relativePath) {
+  const normalized = normalizeArchiveRelativePath(relativePath)
+  if (!normalized) return null
+
+  const resolved = path.resolve(parentPath, normalized.split('/').join(path.sep))
+  return isPathInside(parentPath, resolved) ? resolved : null
+}
+
+function recordInstalledModpackPath(installed, relativePath) {
+  const normalized = normalizeArchiveRelativePath(relativePath)
+  if (!normalized) return
+
+  const parts = normalized.split('/')
+  if (parts.length < 2) return
+
+  const topLevel = parts[0].toLowerCase()
+  const fileName = parts[parts.length - 1]
+  if (!fileName) return
+
+  if (topLevel === 'mods' && Array.isArray(installed.mods)) {
+    installed.mods.push(fileName)
+  } else if (topLevel === 'resourcepacks' && Array.isArray(installed.resourcepacks)) {
+    installed.resourcepacks.push(fileName)
+  } else if (topLevel === 'shaderpacks' && Array.isArray(installed.shaderpacks)) {
+    installed.shaderpacks.push(fileName)
+  }
+}
+
+async function copyDirectoryContents(sourceDir, targetDir, options = {}) {
+  const { installed = null, relativeBase = '' } = options
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true })
+
+  for (const entry of entries) {
+    const relativePath = relativeBase ? `${relativeBase}/${entry.name}` : entry.name
+    const destination = safeJoinInside(targetDir, relativePath)
+    if (!destination) {
+      console.warn('Skipping unsafe archive path:', relativePath)
+      continue
+    }
+
+    const source = path.join(sourceDir, entry.name)
+    if (entry.isDirectory()) {
+      await fs.mkdir(destination, { recursive: true })
+      await copyDirectoryContents(source, targetDir, { installed, relativeBase: relativePath })
+    } else if (entry.isFile()) {
+      await fs.mkdir(path.dirname(destination), { recursive: true })
+      if (path.resolve(source) !== path.resolve(destination)) {
+        await fs.copyFile(source, destination)
+      }
+      if (installed) recordInstalledModpackPath(installed, relativePath)
+    }
+  }
+}
+
+function resolveLibraryRelativePath(library) {
+  if (!library || typeof library !== 'object') return null
+
+  const artifactPath = library.downloads?.artifact?.path
+  if (typeof artifactPath === 'string' && artifactPath.endsWith('.jar')) {
+    return normalizeArchiveRelativePath(`libraries/${artifactPath}`)
+  }
+
+  if (typeof library.name !== 'string') return null
+  const parts = library.name.split(':')
+  if (parts.length < 3) return null
+
+  const [groupId, artifactId, version, classifier] = parts
+  const fileName = `${artifactId}-${version}${classifier ? `-${classifier}` : ''}.jar`
+  return normalizeArchiveRelativePath(`libraries/${groupId.replace(/\./g, '/')}/${artifactId}/${version}/${fileName}`)
+}
+
+function getLibraryRuleAction(library, osName = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'osx' : 'linux') {
+  if (!Array.isArray(library?.rules) || library.rules.length === 0) return true
+
+  let allowed = false
+  for (const rule of library.rules) {
+    const matchesOs = !rule.os?.name || rule.os.name === osName
+    if (!matchesOs) continue
+    allowed = rule.action === 'allow'
+  }
+  return allowed
+}
+
+function getBaseLibraryRelativePaths(versionJson) {
+  if (!Array.isArray(versionJson?.libraries)) return []
+
+  const libraries = []
+  for (const library of versionJson.libraries) {
+    if (!getLibraryRuleAction(library)) continue
+    const relativePath = resolveLibraryRelativePath(library)
+    if (relativePath) libraries.push(relativePath)
+  }
+  return Array.from(new Set(libraries))
+}
+
+function appendJvmPropertyList(args, propertyName, entries, separator = process.platform === 'win32' ? ';' : ':') {
+  if (!Array.isArray(args) || !Array.isArray(entries) || entries.length === 0) return
+
+  const cleanEntries = entries.filter(Boolean)
+  if (cleanEntries.length === 0) return
+
+  const prefix = `-D${propertyName}=`
+  const propertyIndex = args.findIndex((item) => typeof item === 'string' && item.startsWith(prefix))
+  if (propertyIndex >= 0) {
+    const current = args[propertyIndex].slice(prefix.length)
+    const merged = Array.from(new Set([...current.split(separator).filter(Boolean), ...cleanEntries]))
+    args[propertyIndex] = `${prefix}${merged.join(separator)}`
+  } else {
+    args.push(`${prefix}${Array.from(new Set(cleanEntries)).join(separator)}`)
+  }
+}
+
 async function loadModrinthCache() {
   return await readJson(modrinthCachePath, {})
 }
@@ -583,15 +764,6 @@ async function getModrinthVersions(projectId) {
 
 
 
-async function getForgeVersionJson(minecraftVersion) {
-  // For simplicity, assume latest Forge for the version
-  const url = `https://files.minecraftforge.net/net/minecraftforge/forge/index_${minecraftVersion}.html`
-  // This is not accurate, but for demo
-  // Actually, need to parse or use API
-  // For now, skip Forge
-  throw new Error('Forge not implemented yet')
-}
-
 function chooseModrinthVersion(versions, gameVersion, loader) {
   let candidates = Array.isArray(versions) ? versions : []
   
@@ -618,6 +790,127 @@ function chooseModrinthVersion(versions, gameVersion, loader) {
   return candidates[0]
 }
 
+function normalizeModrinthLoader(value) {
+  const text = String(value || '').toLowerCase()
+  if (!text) return null
+
+  if (text.includes('neoforge')) return 'neoforge'
+  if (text.includes('quilt')) return 'quilt'
+  if (text.includes('fabric')) return 'fabric'
+  if (text.includes('forge') || text.includes('minecraftforge')) return 'forge'
+  return null
+}
+
+function detectLoaderFromValues(values = []) {
+  const list = Array.isArray(values) ? values : [values]
+  for (const value of list) {
+    const detected = normalizeModrinthLoader(value)
+    if (detected) return detected
+  }
+  return null
+}
+
+function detectLoaderFromDependencies(dependencies = {}) {
+  if (!dependencies || typeof dependencies !== 'object') return null
+
+  const keys = Object.keys(dependencies).map((key) => String(key).toLowerCase())
+  if (keys.includes('fabric-loader')) return 'fabric'
+  if (keys.includes('quilt-loader')) return 'quilt'
+  if (keys.includes('neoforge')) return 'neoforge'
+  if (keys.includes('forge')) return 'forge'
+  return null
+}
+
+function pickRequiredLoaderVersion(dependencies = {}, loaderName = '') {
+  if (!dependencies || typeof dependencies !== 'object') return null
+
+  const normalizedLoader = normalizeModrinthLoader(loaderName)
+  if (!normalizedLoader) return null
+
+  const loaderDependencyKeys = {
+    fabric: ['fabric-loader'],
+    quilt: ['quilt-loader'],
+    forge: ['forge'],
+    neoforge: ['neoforge']
+  }
+
+  const keys = loaderDependencyKeys[normalizedLoader] || []
+  for (const key of keys) {
+    if (dependencies[key]) return String(dependencies[key])
+  }
+
+  return null
+}
+
+async function readModpackIndexData(modpackPath) {
+  if (!modpackPath) return null
+
+  const candidates = [
+    path.join(modpackPath, 'modrinth.index.json'),
+    path.join(modpackPath, 'overrides', 'modrinth.index.json')
+  ]
+
+  try {
+    const entries = await fs.readdir(modpackPath, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      candidates.push(path.join(modpackPath, entry.name, 'modrinth.index.json'))
+      candidates.push(path.join(modpackPath, entry.name, 'overrides', 'modrinth.index.json'))
+    }
+  } catch {}
+
+  for (const candidate of candidates) {
+    if (!fsSync.existsSync(candidate)) continue
+    try {
+      return JSON.parse(await fs.readFile(candidate, 'utf-8'))
+    } catch (error) {
+      console.warn('Failed to read modpack index:', candidate, error && error.message)
+    }
+  }
+
+  return null
+}
+
+async function getModpackLaunchHints(profile) {
+  if (!profile?.modpackPath) return null
+
+  const indexData = await readModpackIndexData(profile.modpackPath)
+  const profileLoader = normalizeModrinthLoader(profile.loader)
+  const nameLoader = detectLoaderFromValues(profile.name)
+  const dependencyLoader = detectLoaderFromDependencies(indexData?.dependencies)
+  let manifestLoader = null
+  let gameLoader = null
+  let loaderVersion = profile.loaderVersion || ''
+
+  if (indexData?.manifest?.minecraft?.modLoaders) {
+    for (const modLoader of indexData.manifest.minecraft.modLoaders) {
+      const detected = normalizeModrinthLoader(modLoader?.id || modLoader)
+      if (detected) {
+        manifestLoader = detected
+        break
+      }
+    }
+  }
+
+  if (indexData?.game?.loader) {
+    gameLoader = normalizeModrinthLoader(indexData.game.loader)
+  }
+
+  const loader = dependencyLoader || manifestLoader || gameLoader || nameLoader || profileLoader || 'vanilla'
+
+  const requiredLoaderVersion = pickRequiredLoaderVersion(indexData?.dependencies, loader)
+  if (requiredLoaderVersion) {
+    loaderVersion = requiredLoaderVersion
+  } else if (loader !== profileLoader) {
+    loaderVersion = ''
+  }
+
+  return {
+    loader,
+    loaderVersion
+  }
+}
+
 function chooseModrinthFile(files, projectType) {
   if (!Array.isArray(files) || files.length === 0) return null
   const pickByExt = (exts) => files.find((file) => exts.some((ext) => file.filename.toLowerCase().endsWith(ext)))
@@ -633,6 +926,165 @@ function chooseModrinthFile(files, projectType) {
   return pickByExt(['.jar']) || files[0]
 }
 
+function getAddonDirectoryNameForProjectType(projectType) {
+  if (projectType === 'resourcepack') return 'resourcepacks'
+  if (projectType === 'shader') return 'shaderpacks'
+  return 'mods'
+}
+
+function getModrinthLoaderForProjectType(projectType, loader) {
+  if (projectType === 'mod' || projectType === 'modpack') return loader || ''
+  return ''
+}
+
+function createModpackDirectoryKey() {
+  return `custom-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`
+}
+
+function getModpackKeyFromPath(modpackPath) {
+  const resolvedPath = path.resolve(modpackPath || '')
+  if (!isPathInside(modpacksPath, resolvedPath)) {
+    throw new Error('Некорректный путь модпака')
+  }
+  return path.basename(resolvedPath)
+}
+
+function getModpackMetaPath(modpackPath) {
+  return path.join(modpacksPath, `${getModpackKeyFromPath(modpackPath)}.meta.json`)
+}
+
+async function ensureModpackMeta(profile) {
+  if (!profile?.modpackPath) throw new Error('Профиль модпака не найден')
+
+  const modpackKey = getModpackKeyFromPath(profile.modpackPath)
+  const metaPath = getModpackMetaPath(profile.modpackPath)
+  const existing = await readJson(metaPath, {})
+  const meta = {
+    projectId: existing.projectId || modpackKey,
+    versionId: existing.versionId || 'custom',
+    projectTitle: existing.projectTitle || profile.name || modpackKey,
+    gameVersion: existing.gameVersion || profile.versionId,
+    detectedLoader: existing.detectedLoader || profile.loader || 'vanilla',
+    loaderVersion: existing.loaderVersion || profile.loaderVersion || '',
+    custom: existing.custom ?? true,
+    installed: {
+      mods: Array.isArray(existing.installed?.mods) ? existing.installed.mods : [],
+      resourcepacks: Array.isArray(existing.installed?.resourcepacks) ? existing.installed.resourcepacks : [],
+      shaderpacks: Array.isArray(existing.installed?.shaderpacks) ? existing.installed.shaderpacks : []
+    },
+    createdAt: existing.createdAt || new Date().toISOString()
+  }
+  await saveJson(metaPath, meta)
+  return { modpackKey, metaPath, meta }
+}
+
+async function recordTargetModpackAddon(profile, addonDirectoryName, fileName) {
+  const { metaPath, meta } = await ensureModpackMeta(profile)
+  if (!Array.isArray(meta.installed[addonDirectoryName])) meta.installed[addonDirectoryName] = []
+  meta.installed[addonDirectoryName] = [...new Set([...meta.installed[addonDirectoryName], fileName])]
+  await saveJson(metaPath, meta)
+}
+
+async function resolveModrinthInstallTarget(options = {}) {
+  const targetProfileId = options.targetProfileId || options.modpackProfileId
+  const profiles = await getProfiles()
+  let profile = null
+
+  if (targetProfileId) {
+    profile = profiles.find((item) => item.id === targetProfileId)
+  } else if (options.targetModpackPath) {
+    const resolvedTargetPath = path.resolve(options.targetModpackPath)
+    profile = profiles.find((item) => {
+      if (!item?.modpackPath) return false
+      try {
+        return path.resolve(item.modpackPath) === resolvedTargetPath
+      } catch {
+        return false
+      }
+    })
+  }
+
+  if (!profile?.modpackPath) {
+    throw new Error('Выберите модпак, куда установить дополнение')
+  }
+
+  const modpackPath = path.resolve(profile.modpackPath)
+  if (!isPathInside(modpacksPath, modpackPath)) {
+    throw new Error('Некорректный путь модпака')
+  }
+
+  await fs.mkdir(path.join(modpackPath, 'mods'), { recursive: true })
+  await fs.mkdir(path.join(modpackPath, 'resourcepacks'), { recursive: true })
+  await fs.mkdir(path.join(modpackPath, 'shaderpacks'), { recursive: true })
+  await ensureModpackMeta(profile)
+
+  return {
+    profile,
+    modpackPath,
+    modpackKey: getModpackKeyFromPath(modpackPath),
+    gameVersion: profile.versionId || options.gameVersion || '',
+    loader: profile.loader === 'vanilla' ? '' : profile.loader || ''
+  }
+}
+
+async function createCustomModpack(input = {}) {
+  const name = String(input.name || '').trim()
+  const versionId = String(input.versionId || input.minecraftVersion || '').trim()
+  const loader = normalizeModrinthLoader(input.loader) || (input.loader === 'vanilla' ? 'vanilla' : '')
+  const loaderVersion = String(input.loaderVersion || '').trim()
+
+  if (!name) throw new Error('Введите название модпака')
+  if (!versionId) throw new Error('Выберите версию Minecraft')
+  if (!['vanilla', 'forge', 'fabric', 'quilt', 'neoforge'].includes(loader)) {
+    throw new Error('Выберите модлоадер')
+  }
+  if (loader !== 'vanilla' && !loaderVersion) {
+    throw new Error('Выберите версию модлоадера')
+  }
+
+  const modpackKey = createModpackDirectoryKey()
+  const modpackDir = path.join(modpacksPath, modpackKey)
+  await fs.mkdir(path.join(modpackDir, 'mods'), { recursive: true })
+  await fs.mkdir(path.join(modpackDir, 'resourcepacks'), { recursive: true })
+  await fs.mkdir(path.join(modpackDir, 'shaderpacks'), { recursive: true })
+  await fs.mkdir(path.join(modpackDir, 'config'), { recursive: true })
+
+  const profile = {
+    id: `modpack-${modpackKey}`,
+    name,
+    versionId,
+    ram: 'global',
+    javaPath: 'java',
+    username: '',
+    loader,
+    loaderVersion: loader === 'vanilla' ? '' : loaderVersion,
+    fullscreenMode: 'global',
+    modpackPath: modpackDir
+  }
+
+  const meta = {
+    projectId: modpackKey,
+    versionId: 'custom',
+    projectTitle: name,
+    gameVersion: versionId,
+    detectedLoader: loader,
+    loaderVersion: profile.loaderVersion,
+    custom: true,
+    installed: {
+      mods: [],
+      resourcepacks: [],
+      shaderpacks: []
+    },
+    createdAt: new Date().toISOString(),
+    installedAt: Date.now()
+  }
+
+  await saveProfile(profile)
+  await saveJson(path.join(modpacksPath, `${modpackKey}.meta.json`), meta)
+
+  return { success: true, profile }
+}
+
 async function installModrinthVersion(version, options = {}) {
   const { projectType = 'mod', gameVersion = '', loader = '', visited = new Set(), project = null } = options
   if (!version) throw new Error('Версия Modrinth не найдена для установки')
@@ -642,10 +1094,15 @@ async function installModrinthVersion(version, options = {}) {
     throw new Error('Не удалось найти файл для загрузки Modrinth')
   }
 
+  let target = null
   let directory = modsPath
   if (projectType === 'resourcepack') directory = resourcepacksPath
   if (projectType === 'shader') directory = shaderpacksPath
   if (projectType === 'modpack') directory = modpacksPath
+  if (projectType !== 'modpack') {
+    target = await resolveModrinthInstallTarget(options)
+    directory = path.join(target.modpackPath, getAddonDirectoryNameForProjectType(projectType))
+  }
 
   const destination = path.join(directory, file.filename)
   await downloadFile(file.url, destination)
@@ -660,12 +1117,18 @@ async function installModrinthVersion(version, options = {}) {
     return true
   }
 
-  await resolveModrinthDependencies(version, { gameVersion, loader, visited })
-  return true
+  await recordTargetModpackAddon(target.profile, getAddonDirectoryNameForProjectType(projectType), file.filename)
+  await resolveModrinthDependencies(version, {
+    gameVersion: gameVersion || target.gameVersion,
+    loader: loader || target.loader,
+    visited,
+    targetProfileId: target.profile.id
+  })
+  return { destination, fileName: file.filename, targetProfile: target.profile }
 }
 
 async function resolveModrinthDependencies(version, options = {}) {
-  const { gameVersion = '', loader = '', visited = new Set() } = options
+  const { gameVersion = '', loader = '', visited = new Set(), targetProfileId = null } = options
   if (!Array.isArray(version.dependencies)) return []
   const installed = []
 
@@ -679,9 +1142,9 @@ async function resolveModrinthDependencies(version, options = {}) {
     try {
       if (versionId) {
         const depVersion = await getModrinthVersion(versionId)
-        await installModrinthVersion(depVersion, { projectType: depVersion.project_type || 'mod', gameVersion, loader, visited })
+        await installModrinthVersion(depVersion, { projectType: depVersion.project_type || 'mod', gameVersion, loader, visited, targetProfileId })
       } else {
-        await installModrinthProject(projectId, { gameVersion, loader })
+        await installModrinthProject(projectId, { gameVersion, loader, targetProfileId })
       }
       installed.push(projectId)
     } catch (error) {
@@ -745,6 +1208,15 @@ async function installModrinthModpackArchive(filePath, version, project = null) 
   await fs.mkdir(modpackShaderpacksPath, { recursive: true })
   await fs.mkdir(modpackConfigPath, { recursive: true })
 
+  const overridesPath = path.join(root, 'overrides')
+  if (fsSync.existsSync(overridesPath)) {
+    try {
+      await copyDirectoryContents(overridesPath, modpackDir, { installed })
+    } catch (e) {
+      console.warn(`Failed to copy overrides from ${overridesPath}:`, e && e.message)
+    }
+  }
+
   for (const name of installDirs) {
     // Also copy loose .jar/.zip files from root for mods
     if (name === 'mods') {
@@ -772,16 +1244,10 @@ async function installModrinthModpackArchive(filePath, version, project = null) 
       try {
         const destinationDir = name === 'mods' ? modpackModsPath : name === 'resourcepacks' ? modpackResourcepacksPath : modpackShaderpacksPath
         await fs.mkdir(destinationDir, { recursive: true })
-        const files = await fs.readdir(sourceDir)
+        await copyDirectoryContents(sourceDir, destinationDir)
+        const files = await fs.readdir(destinationDir, { withFileTypes: true })
         for (const entry of files) {
-          const src = path.join(sourceDir, entry)
-          const dst = path.join(destinationDir, entry)
-          try {
-            await fs.copyFile(src, dst)
-            installed[name].push(entry)
-          } catch (e) {
-            console.warn(`Failed to copy file ${src} -> ${dst}:`, e && e.message)
-          }
+          if (entry.isFile()) installed[name].push(entry.name)
         }
       } catch (e) {
         console.warn(`Failed to copy ${name} from ${sourceDir}:`, e && e.message)
@@ -789,22 +1255,13 @@ async function installModrinthModpackArchive(filePath, version, project = null) 
     }
   }
   
-  // Also copy config directory if exists
-  const configCandidates = [
-    path.join(root, 'config'),
-    path.join(root, 'overrides', 'config')
-  ]
+  // Also copy config directory if exists. Many modpacks keep nested config,
+  // defaultconfigs, scripts, or KubeJS folders under overrides.
+  const configCandidates = [path.join(root, 'config'), path.join(root, 'overrides', 'config')]
   for (const configSrc of configCandidates) {
     if (fsSync.existsSync(configSrc)) {
       try {
-        const configFiles = await fs.readdir(configSrc)
-        for (const entry of configFiles) {
-          const src = path.join(configSrc, entry)
-          const dst = path.join(modpackConfigPath, entry)
-          try {
-            await fs.copyFile(src, dst)
-          } catch (e) {}
-        }
+        await copyDirectoryContents(configSrc, modpackConfigPath)
       } catch (e) {}
     }
   }
@@ -818,17 +1275,13 @@ async function installModrinthModpackArchive(filePath, version, project = null) 
         try {
           const zip = new AdmZip(p)
           const entries = zip.getEntries().map(e => e.entryName.toLowerCase())
-          // Fabric
-          if (entries.some(n => n.endsWith('fabric.mod.json') || n.includes('fabric/loader') || n.includes('fabric_mod'))) return 'fabric'
-          // Quilt
+          if (entries.some(n => n.includes('meta-inf/neoforge.mods.toml') || n.includes('neoforge.mods.toml'))) return 'neoforge'
           if (entries.some(n => n.endsWith('quilt.mod.json') || n.includes('quilt/') || n.includes('quilt_loader'))) return 'quilt'
-          // Forge
+          if (entries.some(n => n.endsWith('fabric.mod.json') || n.includes('fabric/loader') || n.includes('fabric_mod'))) return 'fabric'
           if (entries.some(n => n.includes('meta-inf/mods.toml') || n.includes('mcmod.info') || n.includes('mods.toml'))) return 'forge'
-          // Neoforge heuristic
           if (lower.includes('neoforge')) return 'neoforge'
-          // Filename heuristics
-          if (lower.includes('fabric')) return 'fabric'
           if (lower.includes('quilt')) return 'quilt'
+          if (lower.includes('fabric')) return 'fabric'
           if (lower.includes('forge')) return 'forge'
         } catch (e) {
           // not a zip or failed to read — ignore
@@ -863,8 +1316,11 @@ async function installModrinthModpackArchive(filePath, version, project = null) 
       versionId: version.id,
       projectTitle: projectTitle,
       gameVersions: version.game_versions || [],
+      gameVersion: version.game_versions?.[0] || '',
       installed,
       detectedLoader: detectedLoader || null,
+      loaderVersion: '',
+      custom: false,
       installedAt: Date.now()
     }
     await saveJson(path.join(modpacksPath, `${projectId}-${version.id}.meta.json`), meta)
@@ -877,19 +1333,22 @@ async function installModrinthProject(projectId, options = {}) {
   const { gameVersion = '', loader = '' } = options
   const project = await getModrinthProject(projectId)
   const versions = await getModrinthVersions(projectId)
-  const version = chooseModrinthVersion(versions, gameVersion || project.game_versions?.[0], loader)
-  if (!version) {
-    throw new Error('Не удалось найти совместимую версию проекта Modrinth')
-  }
+  const projectType = project.project_type || 'mod'
 
-  if (project.project_type === 'modpack') {
+  if (projectType === 'modpack') {
+    const version = chooseModrinthVersion(versions, gameVersion || project.game_versions?.[0], getModrinthLoaderForProjectType(projectType, loader))
+    if (!version) {
+      throw new Error('Не удалось найти совместимую версию модпака Modrinth')
+    }
+
     const modpackProjectId = version.project_id || projectId
     await installModrinthVersion(version, { projectType: 'modpack', gameVersion, loader, project })
     const gameVersionModpack = version.game_versions?.[0] || '1.20.1'
     const extractDir = path.join(modpacksPath, `${modpackProjectId}-${version.id}`)
     const modpackDir = path.join(modpacksPath, `${modpackProjectId}-${version.id}`)
     const modpackModsPath = path.join(modpackDir, 'mods')
-    let modpackLoader = loader || 'vanilla'
+    const requestedModpackLoader = normalizeModrinthLoader(loader)
+    let modpackLoader = requestedModpackLoader || detectLoaderFromValues(project.title) || detectLoaderFromValues(version.name) || detectLoaderFromValues(version.loaders) || detectLoaderFromValues(project.loaders) || 'vanilla'
     let modpackLoaderRequiredVersion = null
     
     // Also check meta produced during extraction for detected loader
@@ -903,9 +1362,9 @@ async function installModrinthProject(projectId, options = {}) {
         const meta = JSON.parse(fsSync.readFileSync(metaPath, 'utf-8'))
         console.log(`[Modrinth] Meta contents:`, JSON.stringify(meta))
         console.log(`[Modrinth] Meta file detectedLoader: '${meta.detectedLoader}', type: ${typeof meta.detectedLoader}`)
-        // Use detectedLoader if available and not already set
+        // Use detectedLoader from archive only as a last-resort fallback.
         if (meta.detectedLoader && (!modpackLoader || modpackLoader === 'vanilla')) {
-          modpackLoader = String(meta.detectedLoader).toLowerCase()
+          modpackLoader = normalizeModrinthLoader(meta.detectedLoader) || 'vanilla'
           console.log(`[Modrinth] Using detected loader from meta file: ${modpackLoader}`)
         }
       }
@@ -963,9 +1422,16 @@ async function installModrinthProject(projectId, options = {}) {
         if (Array.isArray(indexData.files)) {
           for (const f of indexData.files) {
             if (f && f.downloads && f.downloads[0]) {
-              const targetPath = path.join(modpackModsPath, f.path?.split('/').pop() || f.filename)
-              const downloadUrl = f.downloads[0]
-              filesToDownload.push({ url: downloadUrl, target: targetPath })
+              const archivePath = normalizeArchiveRelativePath(f.path || f.filename || '')
+              const targetPath = archivePath
+                ? safeJoinInside(modpackDir, archivePath)
+                : safeJoinInside(modpackModsPath, f.filename || path.basename(String(f.downloads[0])))
+              if (!targetPath) {
+                console.warn('[Modrinth] Skipping unsafe index file path:', f.path || f.filename)
+              } else {
+                const downloadUrl = f.downloads[0]
+                filesToDownload.push({ url: downloadUrl, target: targetPath, archivePath: archivePath || `mods/${path.basename(targetPath)}` })
+              }
             }
             if (f && (f.project_id || f.projectId || f.project)) {
               projectIds.add(f.project_id || f.projectId || f.project)
@@ -992,7 +1458,7 @@ async function installModrinthProject(projectId, options = {}) {
               })
               const basename = path.basename(file.target)
               console.log(`[Modrinth] Downloaded: ${basename}`)
-              downloadedFromIndex.push(basename)
+              downloadedFromIndex.push({ name: basename, archivePath: file.archivePath })
             } catch (e) {
               console.warn(`[Modrinth] Failed to download ${file.url}:`, e && e.message)
             }
@@ -1007,11 +1473,14 @@ async function installModrinthProject(projectId, options = {}) {
               : { projectId: metaProjectId, versionId: version.id, installed: { mods: [], resourcepacks: [], shaderpacks: [] } }
             if (!existingMeta.installed) existingMeta.installed = { mods: [], resourcepacks: [], shaderpacks: [] }
             if (!Array.isArray(existingMeta.installed.mods)) existingMeta.installed.mods = []
-            for (const name of downloadedFromIndex) {
-              if (!existingMeta.installed.mods.includes(name)) {
-                existingMeta.installed.mods.push(name)
-              }
+            if (!Array.isArray(existingMeta.installed.resourcepacks)) existingMeta.installed.resourcepacks = []
+            if (!Array.isArray(existingMeta.installed.shaderpacks)) existingMeta.installed.shaderpacks = []
+            for (const item of downloadedFromIndex) {
+              recordInstalledModpackPath(existingMeta.installed, item.archivePath)
             }
+            existingMeta.installed.mods = [...new Set(existingMeta.installed.mods)]
+            existingMeta.installed.resourcepacks = [...new Set(existingMeta.installed.resourcepacks)]
+            existingMeta.installed.shaderpacks = [...new Set(existingMeta.installed.shaderpacks)]
             await saveJson(metaPathForIndex, existingMeta)
             console.log(`[Modrinth] Updated meta with ${downloadedFromIndex.length} index-downloaded files`)
           } catch (e) {
@@ -1019,49 +1488,32 @@ async function installModrinthProject(projectId, options = {}) {
           }
         }
 
-        for (const pid of projectIds) {
-          try {
-            const proj = await getModrinthProject(pid)
-            if (proj && Array.isArray(proj.loaders)) {
-              const loadersLower = proj.loaders.map((l) => String(l).toLowerCase())
-              if (loadersLower.includes('fabric')) { modpackLoader = 'fabric'; console.log(`[Modrinth] Detected fabric from project ${pid}`); break }
-              if (loadersLower.includes('forge')) { modpackLoader = 'forge'; console.log(`[Modrinth] Detected forge from project ${pid}`); break }
-              if (loadersLower.includes('neoforge')) { modpackLoader = 'neoforge'; console.log(`[Modrinth] Detected neoforge from project ${pid}`); break }
-              if (loadersLower.includes('quilt')) { modpackLoader = 'quilt'; console.log(`[Modrinth] Detected quilt from project ${pid}`); break }
-            }
-          } catch (e) {
-            // ignore per-project errors
-          }
+        const detectedFromDependencies = detectLoaderFromDependencies(indexData.dependencies)
+        if (detectedFromDependencies && !requestedModpackLoader) {
+          modpackLoader = detectedFromDependencies
+          console.log(`[Modrinth] Detected loader from index dependencies: ${modpackLoader}`)
         }
 
         if (modpackLoader === 'vanilla') {
           if (indexData.game && indexData.game.loader) {
-            const gld = String(indexData.game.loader).toLowerCase()
-            if (['fabric','forge','quilt','neoforge'].includes(gld)) modpackLoader = gld
+            const detectedFromGame = normalizeModrinthLoader(indexData.game.loader)
+            if (detectedFromGame) modpackLoader = detectedFromGame
           }
           if (indexData.manifest && indexData.manifest.minecraft && Array.isArray(indexData.manifest.minecraft.modLoaders)) {
             for (const ml of indexData.manifest.minecraft.modLoaders) {
-              const id = String(ml.id || '').toLowerCase()
-              if (id.includes('fabric')) { modpackLoader = 'fabric'; break }
-              if (id.includes('forge')) { modpackLoader = 'forge'; break }
-              if (id.includes('quilt')) { modpackLoader = 'quilt'; break }
+              const detectedFromManifest = normalizeModrinthLoader(ml.id || ml)
+              if (detectedFromManifest) {
+                modpackLoader = detectedFromManifest
+                break
+              }
             }
           }
         }
         
-        // Read required fabric-loader version from index dependencies
-        if (indexData.dependencies && indexData.dependencies['fabric-loader']) {
-          const requiredFabric = indexData.dependencies['fabric-loader']
-          console.log(`[Modrinth] Required fabric-loader from index: ${requiredFabric}`)
-          // Parse version like "0.13.3" to number for comparison
-          const parseVer = (v) => {
-            const m = String(v).match(/^0\.(\d+)\.(\d+)/)
-            return m ? parseInt(m[1]) * 100 + parseInt(m[2]) : 0
-          }
-          const requiredVerNum = parseVer(requiredFabric)
-          console.log(`[Modrinth] Required fabric version number: ${requiredVerNum}`)
-          // Store required version for later use in loader selection
-          modpackLoaderRequiredVersion = requiredFabric
+        const detectedRequiredLoaderVersion = pickRequiredLoaderVersion(indexData.dependencies, modpackLoader)
+        if (detectedRequiredLoaderVersion) {
+          modpackLoaderRequiredVersion = detectedRequiredLoaderVersion
+          console.log(`[Modrinth] Required ${modpackLoader} loader from index: ${modpackLoaderRequiredVersion}`)
         }
       }
     } catch (e) {
@@ -1078,30 +1530,32 @@ async function installModrinthProject(projectId, options = {}) {
         path.join(extractDir, 'mods'),
         path.join(extractDir, 'overrides', 'mods')
       ]
-      for (const modsSourceDir of candidates) {
-        if (!fsSync.existsSync(modsSourceDir)) continue
-        const modFiles = await fs.readdir(modsSourceDir)
-        const modFileNames = modFiles.map(f => f.toLowerCase())
-        console.log(`[Modrinth] Checking mods dir: ${modsSourceDir}, files: ${modFiles.slice(0, 5).join(', ')}`)
-        if (modFileNames.some(f => f.includes('fabric') && (f.includes('api') || f.includes('loader')))) {
-          modpackLoader = 'fabric'
-          console.log(`[Modrinth] Detected fabric from file: ${modFiles.find(f => f.toLowerCase().includes('fabric'))}`)
-          break
-        }
-        if (modFileNames.some(f => f.includes('forge'))) {
-          modpackLoader = 'forge'
-          console.log(`[Modrinth] Detected forge from file: ${modFiles.find(f => f.toLowerCase().includes('forge'))}`)
-          break
-        }
-        if (modFileNames.some(f => f.includes('neoforge'))) {
-          modpackLoader = 'neoforge'
-          console.log(`[Modrinth] Detected neoforge from file: ${modFiles.find(f => f.toLowerCase().includes('neoforge'))}`)
-          break
-        }
-        if (modFileNames.some(f => f.includes('quilt') && f.includes('loader'))) {
-          modpackLoader = 'quilt'
-          console.log(`[Modrinth] Detected quilt from file: ${modFiles.find(f => f.toLowerCase().includes('quilt') && f.toLowerCase().includes('loader'))}`)
-          break
+      if (modpackLoader === 'vanilla') {
+        for (const modsSourceDir of candidates) {
+          if (!fsSync.existsSync(modsSourceDir)) continue
+          const modFiles = await fs.readdir(modsSourceDir)
+          const modFileNames = modFiles.map(f => f.toLowerCase())
+          console.log(`[Modrinth] Checking mods dir: ${modsSourceDir}, files: ${modFiles.slice(0, 5).join(', ')}`)
+          if (modFileNames.some(f => f.includes('neoforge'))) {
+            modpackLoader = 'neoforge'
+            console.log(`[Modrinth] Detected neoforge from file: ${modFiles.find(f => f.toLowerCase().includes('neoforge'))}`)
+            break
+          }
+          if (modFileNames.some(f => f.includes('quilt') && f.includes('loader'))) {
+            modpackLoader = 'quilt'
+            console.log(`[Modrinth] Detected quilt from file: ${modFiles.find(f => f.toLowerCase().includes('quilt') && f.toLowerCase().includes('loader'))}`)
+            break
+          }
+          if (modFileNames.some(f => f.includes('fabric') && (f.includes('api') || f.includes('loader')))) {
+            modpackLoader = 'fabric'
+            console.log(`[Modrinth] Detected fabric from file: ${modFiles.find(f => f.toLowerCase().includes('fabric'))}`)
+            break
+          }
+          if (modFileNames.some(f => f.includes('forge') && !f.includes('forgeconfigapiport') && !f.includes('forge-config-api-port'))) {
+            modpackLoader = 'forge'
+            console.log(`[Modrinth] Detected forge from file: ${modFiles.find(f => f.toLowerCase().includes('forge'))}`)
+            break
+          }
         }
       }
       console.log(`[Modrinth] After fallback scan: modpackLoader=${modpackLoader}`)
@@ -1118,7 +1572,7 @@ async function installModrinthProject(projectId, options = {}) {
       id: `modpack-${projectId}`,
       name: `Modpack: ${project.title}`,
       versionId: gameVersionModpack,
-      ram: '4G',
+      ram: 'global',
       javaPath: 'java',
       username: '',
       loader: modpackLoader,
@@ -1152,12 +1606,14 @@ async function installModrinthProject(projectId, options = {}) {
           }
         }
         if (!selectedVersion) {
-          const stableVersions = versions.filter(v => v.stable)
+          const stableVersions = versions
+            .filter(v => v.stable)
+            .sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }))
           if (stableVersions.length > 0) {
-            selectedVersion = stableVersions[stableVersions.length - 1] // latest stable
+            selectedVersion = stableVersions[0] // latest stable
             console.log(`[Modrinth] Using latest stable Fabric version: ${selectedVersion.version}`)
           } else {
-            selectedVersion = versions[versions.length - 1] // latest available
+            selectedVersion = [...versions].sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }))[0] // latest available
             console.log(`[Modrinth] Using latest available Fabric version: ${selectedVersion.version}`)
           }
         }
@@ -1173,12 +1629,14 @@ async function installModrinthProject(projectId, options = {}) {
           }))
           .filter((item) => item.version)
 
-        const stableVersions = versions.filter(v => v.stable)
+        const stableVersions = versions
+          .filter(v => v.stable)
+          .sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }))
         if (stableVersions.length > 0) {
-          selectedVersion = stableVersions[stableVersions.length - 1] // latest stable
+          selectedVersion = stableVersions[0] // latest stable
           console.log(`[Modrinth] Using latest stable Quilt version: ${selectedVersion.version}`)
         } else {
-          selectedVersion = versions[versions.length - 1] // latest available
+          selectedVersion = [...versions].sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }))[0] // latest available
           console.log(`[Modrinth] Using latest available Quilt version: ${selectedVersion.version}`)
         }
 
@@ -1213,10 +1671,10 @@ async function installModrinthProject(projectId, options = {}) {
 
         const stableVersions = neoforgeVersions.filter(v => v.stable)
         if (stableVersions.length > 0) {
-          selectedVersion = stableVersions[stableVersions.length - 1] // latest stable
+          selectedVersion = stableVersions[0] // latest stable
           console.log(`[Modrinth] Using latest stable NeoForge version: ${selectedVersion.version}`)
         } else {
-          selectedVersion = neoforgeVersions[neoforgeVersions.length - 1] // latest available
+          selectedVersion = neoforgeVersions[0] // latest available
           console.log(`[Modrinth] Using latest available NeoForge version: ${selectedVersion.version}`)
         }
       }
@@ -1240,9 +1698,24 @@ async function installModrinthProject(projectId, options = {}) {
       if (fsSync.existsSync(metaPath)) {
         const meta = await readJson(metaPath, {})
         meta.projectTitle = project.title
+        meta.gameVersion = gameVersionModpack
+        meta.detectedLoader = modpackLoader
+        meta.loaderVersion = modpackProfile.loaderVersion || ''
+        meta.custom = false
+        if (!meta.installed) meta.installed = { mods: [], resourcepacks: [], shaderpacks: [] }
         await saveJson(metaPath, meta)
       } else {
-        await saveJson(metaPath, { projectId, versionId: version.id, projectTitle: project.title, installed: {}, detectedLoader: modpackLoader })
+        await saveJson(metaPath, {
+          projectId,
+          versionId: version.id,
+          projectTitle: project.title,
+          gameVersion: gameVersionModpack,
+          installed: { mods: [], resourcepacks: [], shaderpacks: [] },
+          detectedLoader: modpackLoader,
+          loaderVersion: modpackProfile.loaderVersion || '',
+          custom: false,
+          installedAt: Date.now()
+        })
       }
     } catch (e) {
       console.warn('Failed to update modpack meta with title:', e && e.message)
@@ -1250,16 +1723,47 @@ async function installModrinthProject(projectId, options = {}) {
     return { success: true, profile: modpackProfile }
   }
 
-  const installResult = await installModrinthVersion(version, { projectType: project.project_type, gameVersion, loader })
-  console.log(`[Modrinth] Установлен проект: ${project.title} (${project.project_type})`)
-  return { success: true, projectType: project.project_type }
+  const target = await resolveModrinthInstallTarget(options)
+  const effectiveGameVersion = gameVersion || target.gameVersion || project.game_versions?.[0] || ''
+  const effectiveLoader = getModrinthLoaderForProjectType(projectType, loader || target.loader)
+
+  if (projectType === 'mod' && !effectiveLoader) {
+    throw new Error('В выбранном модпаке Vanilla нет модлоадера для установки модов')
+  }
+
+  const version = chooseModrinthVersion(versions, effectiveGameVersion, effectiveLoader)
+
+  if (!version) {
+    const targetText = [
+      effectiveGameVersion,
+      effectiveLoader ? effectiveLoader : null
+    ].filter(Boolean).join(' / ')
+    throw new Error(`Нет совместимой версии "${project.title}" для ${targetText || 'выбранного модпака'}`)
+  }
+
+  const installResult = await installModrinthVersion(version, {
+    projectType,
+    gameVersion: effectiveGameVersion,
+    loader: effectiveLoader,
+    project,
+    targetProfileId: target.profile.id
+  })
+  console.log(`[Modrinth] Установлен проект: ${project.title} (${projectType}) -> ${target.profile.name}`)
+  return {
+    success: true,
+    projectType,
+    version: version.version_number || version.name,
+    targetProfile: target.profile,
+    fileName: installResult?.fileName
+  }
 }
 
 async function getInstalledModrinthAddons() {
   const addons = []
 
   // Build mapping from installed filename -> modpack meta (if available)
-  const originMap = {} // filenameLower -> { projectId, versionId, detectedLoader }
+  const originMap = {} // filenameLower -> origin meta
+  const modpackMetaByKey = {}
   try {
     if (fsSync.existsSync(modpacksPath)) {
       const metaFiles = await fs.readdir(modpacksPath)
@@ -1267,10 +1771,18 @@ async function getInstalledModrinthAddons() {
         if (!mf.endsWith('.meta.json')) continue
         try {
           const meta = JSON.parse(fsSync.readFileSync(path.join(modpacksPath, mf), 'utf-8'))
-          const projectId = meta.projectId || null
-          const versionId = meta.versionId || null
-          const detectedLoader = meta.detectedLoader || null
-          const projectTitle = meta.projectTitle || null
+          const modpackKey = mf.replace(/\.meta\.json$/, '')
+          const origin = {
+            modpackKey,
+            projectId: meta.projectId || modpackKey,
+            versionId: meta.versionId || null,
+            detectedLoader: meta.detectedLoader || null,
+            projectTitle: meta.projectTitle || modpackKey,
+            gameVersion: meta.gameVersion || (Array.isArray(meta.gameVersions) ? meta.gameVersions[0] : ''),
+            loaderVersion: meta.loaderVersion || '',
+            custom: Boolean(meta.custom)
+          }
+          modpackMetaByKey[modpackKey] = origin
           if (meta.installed) {
             // Map all addon types: mods, shaderpacks, resourcepacks
             const addonTypes = ['mods', 'shaderpacks', 'resourcepacks']
@@ -1279,9 +1791,9 @@ async function getInstalledModrinthAddons() {
                 for (const filename of meta.installed[type]) {
                   if (!filename) continue
                   const key = String(filename).toLowerCase()
-                  originMap[key] = { projectId, versionId, detectedLoader, projectTitle }
+                  originMap[key] = origin
                   // also map potential .disabled variant
-                  originMap[key + '.disabled'] = { projectId, versionId, detectedLoader, projectTitle }
+                  originMap[key + '.disabled'] = origin
                 }
               }
             }
@@ -1295,7 +1807,18 @@ async function getInstalledModrinthAddons() {
     // ignore
   }
 
-  const scanDirectory = async (directory, type) => {
+  const toAddonOrigin = (origin) => origin ? ({
+    modpackKey: origin.modpackKey,
+    modpackId: origin.projectId,
+    modpackVersion: origin.versionId,
+    detectedLoader: origin.detectedLoader,
+    projectTitle: origin.projectTitle,
+    gameVersion: origin.gameVersion,
+    loaderVersion: origin.loaderVersion,
+    custom: origin.custom
+  }) : null
+
+  const scanDirectory = async (directory, type, inferredOrigin = null) => {
     try {
       const entries = await fs.readdir(directory, { withFileTypes: true })
       for (const entry of entries) {
@@ -1303,9 +1826,10 @@ async function getInstalledModrinthAddons() {
         const enabled = !entry.name.endsWith('.disabled')
         const cleanName = enabled ? entry.name : entry.name.replace(/\.disabled$/, '')
         const nameLower = entry.name.toLowerCase()
-        const origin = originMap[nameLower] ? { modpackId: originMap[nameLower].projectId, modpackVersion: originMap[nameLower].versionId, detectedLoader: originMap[nameLower].detectedLoader, projectTitle: originMap[nameLower].projectTitle } : null
+        const cleanNameLower = cleanName.toLowerCase()
+        const origin = toAddonOrigin(inferredOrigin || originMap[nameLower] || originMap[cleanNameLower])
         addons.push({
-          id: `${type}:${cleanName}`,
+          id: `${type}:${path.resolve(directory, entry.name)}`,
           name: cleanName,
           type,
           enabled,
@@ -1334,12 +1858,25 @@ async function getInstalledModrinthAddons() {
         const modpackPath = path.join(modpacksPath, dir.name)
         const hasIndex = fsSync.existsSync(path.join(modpackPath, 'modrinth.index.json'))
         const hasMeta = fsSync.existsSync(path.join(modpacksPath, `${dir.name}.meta.json`))
+        const hasAddonDirs = fsSync.existsSync(path.join(modpackPath, 'mods')) ||
+          fsSync.existsSync(path.join(modpackPath, 'shaderpacks')) ||
+          fsSync.existsSync(path.join(modpackPath, 'resourcepacks'))
 
-        if (hasIndex || hasMeta) {
+        if (hasIndex || hasMeta || hasAddonDirs) {
+          const inferredOrigin = modpackMetaByKey[dir.name] || {
+            modpackKey: dir.name,
+            projectId: dir.name,
+            versionId: '',
+            detectedLoader: null,
+            projectTitle: dir.name,
+            gameVersion: '',
+            loaderVersion: '',
+            custom: false
+          }
           // Scan subdirectories within the modpack
-          await scanDirectory(path.join(modpackPath, 'mods'), 'mods')
-          await scanDirectory(path.join(modpackPath, 'shaderpacks'), 'shaderpacks')
-          await scanDirectory(path.join(modpackPath, 'resourcepacks'), 'resourcepacks')
+          await scanDirectory(path.join(modpackPath, 'mods'), 'mods', inferredOrigin)
+          await scanDirectory(path.join(modpackPath, 'shaderpacks'), 'shaderpacks', inferredOrigin)
+          await scanDirectory(path.join(modpackPath, 'resourcepacks'), 'resourcepacks', inferredOrigin)
         }
       }
     }
@@ -1355,6 +1892,14 @@ function getAddonDirectory(type) {
   if (type === 'shaderpacks') return shaderpacksPath
   if (type === 'resourcepacks') return resourcepacksPath
   throw new Error(`Неизвестный тип аддона: ${type}`)
+}
+
+function sanitizeManagedFileName(name) {
+  const text = String(name || '').trim()
+  if (!text || text.includes('\0') || text.includes('/') || text.includes('\\') || path.basename(text) !== text) {
+    throw new Error('Некорректное имя файла')
+  }
+  return text
 }
 
 function isPathInside(parentPath, childPath) {
@@ -1379,7 +1924,8 @@ function resolveManagedAddonPath(type, addonPath) {
 async function toggleInstalledAddon(type, name, enabled, addonPath = null) {
   // name is always the clean name without .disabled
   // The actual file might be name or name + '.disabled'
-  const possibleNames = [name, name + '.disabled']
+  const safeName = sanitizeManagedFileName(name)
+  const possibleNames = [safeName, `${safeName}.disabled`]
 
   // First try the main directory
   const mainDirectory = getAddonDirectory(type)
@@ -1420,11 +1966,14 @@ async function toggleInstalledAddon(type, name, enabled, addonPath = null) {
   }
 
   if (!currentPath) {
-    throw new Error(`Файл не найден: ${name}`)
+    throw new Error(`Файл не найден: ${safeName}`)
   }
 
-  const targetName = enabled ? name : `${name}.disabled`
-  const targetPath = path.dirname(currentPath) + path.sep + targetName
+  const targetName = enabled ? safeName : `${safeName}.disabled`
+  const targetPath = path.join(path.dirname(currentPath), targetName)
+  if (!resolveManagedAddonPath(type, targetPath)) {
+    throw new Error('Некорректный путь файла')
+  }
 
   await fs.rename(currentPath, targetPath)
 }
@@ -1432,7 +1981,8 @@ async function toggleInstalledAddon(type, name, enabled, addonPath = null) {
 async function deleteInstalledAddon(type, name, addonPath = null) {
   // name is always the clean name without .disabled
   // The actual file might be name or name + '.disabled'
-  const possibleNames = [name, name + '.disabled']
+  const safeName = sanitizeManagedFileName(name)
+  const possibleNames = [safeName, `${safeName}.disabled`]
 
   // First try the main directory
   const mainDirectory = getAddonDirectory(type)
@@ -1473,15 +2023,19 @@ async function deleteInstalledAddon(type, name, addonPath = null) {
   }
 
   if (!targetPath) {
-    throw new Error(`Файл не найден: ${name}`)
+    throw new Error(`Файл не найден: ${safeName}`)
   }
 
   await fs.rm(targetPath, { recursive: true, force: true })
 }
 
 async function deleteModpackDirectory(modpackKey) {
-  const dirPath = path.join(modpacksPath, modpackKey)
-  const metaPath = path.join(modpacksPath, `${modpackKey}.meta.json`)
+  const safeModpackKey = sanitizeManagedFileName(modpackKey)
+  const dirPath = path.join(modpacksPath, safeModpackKey)
+  const metaPath = path.join(modpacksPath, `${safeModpackKey}.meta.json`)
+  if (!isPathInside(modpacksPath, dirPath) || !isPathInside(modpacksPath, metaPath)) {
+    throw new Error('Некорректный путь модпака')
+  }
 
   if (fsSync.existsSync(dirPath)) {
     await fs.rm(dirPath, { recursive: true, force: true })
@@ -1544,12 +2098,13 @@ async function getInstalledVersions() {
 }
 
 async function deleteInstalledVersion(versionId) {
-  const versionDir = path.join(versionsPath, versionId)
+  const safeVersionId = sanitizeManagedFileName(versionId)
+  const versionDir = path.join(versionsPath, safeVersionId)
   try {
     await fs.rm(versionDir, { recursive: true, force: true })
   } catch (error) {
-    console.error(`Не удалось удалить версию ${versionId}:`, error)
-    throw new Error(`Не удалось удалить версию ${versionId}`)
+    console.error(`Не удалось удалить версию ${safeVersionId}:`, error)
+    throw new Error(`Не удалось удалить версию ${safeVersionId}`)
   }
 }
 
@@ -1761,6 +2316,272 @@ async function saveSettings(settings) {
   await fs.writeFile(settingsPath, JSON.stringify({ ...defaultLauncherSettings, ...(settings || {}) }, null, 2), 'utf-8')
 }
 
+function normalizeMinecraftUsername(value) {
+  const name = String(value || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 16)
+  return name.length >= 3 ? name : ''
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function getSystemRamGB() {
+  const oneGB = 1024 * 1024 * 1024
+  return {
+    total: Math.max(1, Math.round(os.totalmem() / oneGB)),
+    free: Math.max(1, Math.round(os.freemem() / oneGB))
+  }
+}
+
+async function detectWindowsKuroBoostHardware() {
+  if (process.platform !== 'win32') return {}
+
+  const script = [
+    '$gpu = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Select-Object Name, AdapterRAM',
+    '$disk = Get-PhysicalDisk -ErrorAction SilentlyContinue | Select-Object FriendlyName, MediaType',
+    '$battery = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue',
+    '[pscustomobject]@{ gpu = $gpu; disks = $disk; laptop = [bool]$battery } | ConvertTo-Json -Compress -Depth 4'
+  ].join('; ')
+
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+      timeout: 5000,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    })
+    return JSON.parse(String(stdout || '{}').trim() || '{}')
+  } catch (error) {
+    if (verboseLaunchLogging) console.warn('KuroBoost hardware probe failed:', error && error.message)
+    return {}
+  }
+}
+
+function normalizeHardwareList(value) {
+  if (!value) return []
+  return Array.isArray(value) ? value : [value]
+}
+
+async function getKuroBoostHardwareProfile() {
+  const cpus = os.cpus() || []
+  const ram = getSystemRamGB()
+  const windowsProbe = await detectWindowsKuroBoostHardware()
+  const gpus = normalizeHardwareList(windowsProbe.gpu)
+    .map((item) => ({
+      name: String(item?.Name || '').trim(),
+      vramGB: item?.AdapterRAM ? Math.max(0, Math.round(Number(item.AdapterRAM) / (1024 * 1024 * 1024))) : 0
+    }))
+    .filter((item) => item.name)
+  const disks = normalizeHardwareList(windowsProbe.disks)
+    .map((item) => ({
+      name: String(item?.FriendlyName || '').trim(),
+      type: String(item?.MediaType || '').trim()
+    }))
+    .filter((item) => item.name || item.type)
+
+  return {
+    cpu: {
+      model: cpus[0]?.model || os.arch(),
+      cores: cpus.length || 1
+    },
+    ram,
+    gpu: gpus,
+    disks,
+    laptop: Boolean(windowsProbe.laptop),
+    platform: `${os.type()} ${os.release()} ${os.arch()}`
+  }
+}
+
+function getKuroBoostFileList(directory, extensions) {
+  try {
+    if (!directory || !fsSync.existsSync(directory)) return []
+    return fsSync.readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .filter((name) => extensions.some((ext) => name.toLowerCase().endsWith(ext)))
+  } catch {
+    return []
+  }
+}
+
+function getKuroBoostModKey(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\.disabled$/i, '')
+    .replace(/\.(jar|zip)$/i, '')
+    .replace(/(?:^|[-_.+ ])(?:mc|forge|fabric|quilt|neoforge)?\d+(?:\.\d+){1,4}[\w.+-]*/g, '')
+    .replace(/[-_.+ ]+/g, '')
+}
+
+function scanKuroBoostGameState(gameDirectory) {
+  const mods = getKuroBoostFileList(path.join(gameDirectory, 'mods'), ['.jar', '.jar.disabled'])
+  const shaderpacks = getKuroBoostFileList(path.join(gameDirectory, 'shaderpacks'), ['.zip', '.zip.disabled'])
+  const resourcepacks = getKuroBoostFileList(path.join(gameDirectory, 'resourcepacks'), ['.zip', '.zip.disabled'])
+  const normalized = mods.map((name) => ({ name, key: getKuroBoostModKey(name) })).filter((item) => item.key)
+  const duplicates = []
+  const byKey = new Map()
+
+  for (const item of normalized) {
+    const list = byKey.get(item.key) || []
+    list.push(item.name)
+    byKey.set(item.key, list)
+  }
+
+  for (const list of byKey.values()) {
+    if (list.length > 1) duplicates.push(list)
+  }
+
+  const lowerNames = mods.map((name) => name.toLowerCase())
+  const has = (pattern) => lowerNames.some((name) => pattern.test(name))
+  const warnings = []
+
+  if (has(/sodium/) && has(/optifine/)) warnings.push('Sodium и OptiFine обычно конфликтуют: оставьте один рендер-пайплайн.')
+  if (has(/sodium/) && has(/embeddium/)) warnings.push('Sodium и Embeddium выполняют одну роль; дубликат может ломать запуск.')
+  if (has(/iris/) && has(/oculus/)) warnings.push('Iris и Oculus относятся к разным loader-экосистемам; проверьте совместимость.')
+  if (has(/betterfoliage|better-foliage/)) warnings.push('BetterFoliage найден: на слабых GPU он часто даёт просадки frametime.')
+
+  for (const list of duplicates.slice(0, 3)) {
+    warnings.push(`Найден возможный дубликат мода: ${list.join(' / ')}`)
+  }
+
+  return {
+    mods,
+    shaderpacks,
+    resourcepacks,
+    warnings
+  }
+}
+
+function recommendKuroBoostRam(profile, hardware, gameState) {
+  const totalRam = hardware.ram.total
+  const modCount = gameState.mods.length
+  const shaderCount = gameState.shaderpacks.length
+  const isModded = profile.loader && profile.loader !== 'vanilla'
+  let recommended = isModded ? 5 : 4
+
+  if (profile.modpackPath || modCount > 35) recommended = 6
+  if (modCount > 80 || shaderCount > 0) recommended = 8
+  if (modCount > 150) recommended = 10
+
+  if (totalRam <= 8) recommended = Math.min(recommended, 3)
+  else if (totalRam <= 12) recommended = Math.min(recommended, 4)
+  else if (totalRam <= 16) recommended = Math.min(recommended, 6)
+  else if (totalRam <= 24) recommended = Math.min(recommended, 8)
+
+  return `${clampNumber(recommended, 2, Math.max(2, totalRam - 3))}G`
+}
+
+function buildKuroBoostGameOptions(profile, hardware, gameState) {
+  const totalRam = hardware.ram.total
+  const modCount = gameState.mods.length
+  const hasShaders = gameState.shaderpacks.length > 0
+  const isLaptop = hardware.laptop
+  const isHeavyPack = profile.modpackPath || modCount > 55 || hasShaders
+  const renderDistance = isLaptop
+    ? 8
+    : isHeavyPack
+      ? (totalRam >= 24 ? 12 : 10)
+      : (totalRam >= 16 ? 12 : 10)
+  const maxFps = isLaptop ? 75 : 144
+
+  return {
+    renderDistance: String(renderDistance),
+    simulationDistance: String(clampNumber(renderDistance - 2, 5, 10)),
+    maxFps: String(maxFps),
+    particles: isHeavyPack ? '1' : '0',
+    mipmapLevels: totalRam <= 8 ? '2' : '4'
+  }
+}
+
+function buildKuroBoostJvmArgs(hardware) {
+  const args = [
+    '-XX:+UseG1GC',
+    '-XX:+ParallelRefProcEnabled',
+    '-XX:+UnlockExperimentalVMOptions',
+    '-XX:MaxGCPauseMillis=80',
+    '-XX:+DisableExplicitGC',
+    '-XX:+UseStringDeduplication',
+    '-XX:+PerfDisableSharedMem',
+    '-Dkuroboost.enabled=true',
+    '-Dkuroboost.preset=ai-optimized'
+  ]
+
+  if (hardware.ram.total >= 16) {
+    args.push('-XX:G1NewSizePercent=20', '-XX:G1ReservePercent=20')
+  }
+
+  return args
+}
+
+async function applyKuroBoostOptions(gameDirectory, optionsPatch) {
+  try {
+    await fs.mkdir(gameDirectory, { recursive: true })
+    const optionsPath = path.join(gameDirectory, 'options.txt')
+    const existing = fsSync.existsSync(optionsPath)
+      ? String(await fs.readFile(optionsPath, 'utf-8')).split(/\r?\n/)
+      : []
+    const values = new Map()
+
+    for (const line of existing) {
+      const index = line.indexOf(':')
+      if (index <= 0) continue
+      values.set(line.slice(0, index), line.slice(index + 1))
+    }
+
+    for (const [key, value] of Object.entries(optionsPatch)) {
+      values.set(key, value)
+    }
+
+    const keys = Array.from(values.keys())
+    await fs.writeFile(optionsPath, keys.map((key) => `${key}:${values.get(key)}`).join('\n') + '\n', 'utf-8')
+  } catch (error) {
+    console.warn('KuroBoost failed to write Minecraft options:', error && error.message)
+  }
+}
+
+async function prepareKuroBoostPlan(profile, settings, gameDirectory) {
+  const enabled = settings?.kuroBoost !== false
+  if (!enabled) {
+    return { enabled, warnings: [] }
+  }
+
+  const hardware = await getKuroBoostHardwareProfile()
+  const gameState = scanKuroBoostGameState(gameDirectory)
+
+  return {
+    enabled,
+    preset: 'AI Optimized',
+    hardware,
+    gameState,
+    recommendedRam: recommendKuroBoostRam(profile, hardware, gameState),
+    gameOptions: buildKuroBoostGameOptions(profile, hardware, gameState),
+    jvmArgs: buildKuroBoostJvmArgs(hardware),
+    warnings: gameState.warnings
+  }
+}
+
+async function writeKuroBoostPlan(gameDirectory, plan) {
+  if (!plan?.enabled) return
+  try {
+    const planPath = path.join(gameDirectory, '.kuroboost', 'last-plan.json')
+    await saveJson(planPath, {
+      createdAt: new Date().toISOString(),
+      preset: plan.preset,
+      hardware: plan.hardware,
+      gameState: {
+        mods: plan.gameState.mods.length,
+        shaderpacks: plan.gameState.shaderpacks.length,
+        resourcepacks: plan.gameState.resourcepacks.length
+      },
+      recommendedRam: plan.recommendedRam,
+      gameOptions: plan.gameOptions,
+      jvmArgs: plan.jvmArgs,
+      warnings: plan.warnings
+    })
+  } catch (error) {
+    console.warn('KuroBoost failed to write plan:', error && error.message)
+  }
+}
+
 async function getAuthState() {
   const auth = await readJson(authPath, {})
   if (auth.email && auth.loggedIn) {
@@ -1961,6 +2782,156 @@ function formatJavaCompatibilityRange(range) {
       : `${range.minMajor}-${range.maxMajor}`
   }
   return `${range.minMajor}+`
+}
+
+function resolveLoaderJvmArgs(loaderJsonPath, { loaderId, baseVersionId, root }) {
+  try {
+    if (!loaderJsonPath || !fsSync.existsSync(loaderJsonPath)) return []
+    const json = JSON.parse(fsSync.readFileSync(loaderJsonPath, 'utf-8'))
+    const jvmArgs = Array.isArray(json?.arguments?.jvm) ? json.arguments.jvm : []
+    const libraryDirectory = path.join(root, 'libraries')
+    const classpathSeparator = process.platform === 'win32' ? ';' : ':'
+    const versionName = loaderId || baseVersionId
+    const resolved = []
+
+    const pushValue = (value) => {
+      if (Array.isArray(value)) {
+        for (const item of value) pushValue(item)
+        return
+      }
+      if (typeof value !== 'string') return
+      resolved.push(
+        value
+          .replace(/\$\{library_directory\}/g, libraryDirectory)
+          .replace(/\$\{classpath_separator\}/g, classpathSeparator)
+          .replace(/\$\{version_name\}/g, versionName)
+      )
+    }
+
+    for (const entry of jvmArgs) {
+      if (typeof entry === 'string') {
+        pushValue(entry)
+      } else if (entry && typeof entry === 'object' && 'value' in entry) {
+        pushValue(entry.value)
+      }
+    }
+
+    return resolved
+  } catch (error) {
+    console.warn('Failed to resolve loader JVM args:', error && error.message)
+    return []
+  }
+}
+
+function dedupeJvmArgsPreservingPairs(args) {
+  if (!Array.isArray(args)) return []
+
+  const result = []
+  const seen = new Set()
+  const optionsWithValue = new Set([
+    '-p',
+    '--module-path',
+    '--upgrade-module-path',
+    '--add-modules',
+    '--add-reads',
+    '--add-opens',
+    '--add-exports',
+    '--patch-module',
+    '--limit-modules',
+    '--enable-native-access'
+  ])
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (typeof arg === 'string' && optionsWithValue.has(arg) && typeof args[i + 1] === 'string') {
+      const key = `${arg}\0${args[i + 1]}`
+      if (!seen.has(key)) {
+        result.push(arg, args[i + 1])
+        seen.add(key)
+      }
+      i += 1
+      continue
+    }
+
+    const key = typeof arg === 'string' ? arg : JSON.stringify(arg)
+    if (!seen.has(key)) {
+      result.push(arg)
+      seen.add(key)
+    }
+  }
+
+  return result
+}
+
+function parseJavaArgsFile(argsFilePath) {
+  try {
+    if (!argsFilePath || !fsSync.existsSync(argsFilePath)) return []
+    const content = fsSync.readFileSync(argsFilePath, 'utf-8')
+
+    // Tokenize lines while handling quoted strings and ignoring comments
+    const lines = content.split(/\r?\n/)
+    const raw = []
+    for (const line of lines) {
+      const trimmed = (line || '').trim()
+      if (!trimmed) continue
+      if (trimmed.startsWith('#') || trimmed.startsWith('//')) continue
+
+      const parts = trimmed.match(/(?:[^\s\"]+|\"[^\"]*\")+/g) || []
+      for (let p of parts) {
+        if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1)
+        if (p) raw.push(p)
+      }
+    }
+
+    // Some JVM options (like --add-opens/--add-exports/--add-reads) accept
+    // multiple values. To avoid ambiguities when the launcher constructs
+    // the final command line, convert each value into a separate
+    // token of the form `--option=value`.
+    const multiValueOpts = new Set(['--add-opens', '--add-exports', '--add-reads'])
+    const result = []
+    for (let i = 0; i < raw.length; i++) {
+      const token = raw[i]
+      if (!token) continue
+
+      if (token.startsWith('-')) {
+        if (multiValueOpts.has(token)) {
+          // Collect subsequent non-flag tokens as values for this option
+          const values = []
+          let j = i + 1
+          while (j < raw.length && !raw[j].startsWith('-')) {
+            values.push(raw[j])
+            j += 1
+          }
+          if (values.length === 0) {
+            result.push(token)
+          } else {
+            for (const v of values) {
+              result.push(`${token}=${v}`)
+            }
+            i = j - 1
+          }
+        } else {
+          // Regular flag: if next token is a non-flag, pair it, otherwise keep single
+          if (raw[i + 1] && !raw[i + 1].startsWith('-')) {
+            result.push(token)
+            result.push(raw[i + 1])
+            i += 1
+          } else {
+            result.push(token)
+          }
+        }
+      } else {
+        // Non-flag token encountered -> likely the main class or game argument.
+        // Stop parsing JVM arguments here and do not include application args.
+        break
+      }
+    }
+
+    return result
+  } catch (error) {
+    console.warn('Failed to parse Java args file:', error && error.message)
+    return []
+  }
 }
 
 function mergeJavaCompatibilityRanges(primaryRange, fallbackRange) {
@@ -2164,28 +3135,53 @@ async function findJavaPath(preferredPath, minMajor = 17, maxMajor = null, event
   return selected.candidate
 }
 
-async function launchGame(profile, event) {
-  resetLaunchConsoleState()
-  broadcastLaunchProgress({ reset: true, message: `Подготовка запуска профиля "${profile.name || profile.versionId}"...`, phase: 'preparing' })
-  if (mainWindow) {
-    try { mainWindow.hide() } catch {}
+async function launchGame(profile, event, launcherProfileNameOverride = '') {
+  broadcastLaunchProgress({ message: `Подготовка запуска профиля "${profile.name || profile.versionId}"...` })
+  try {
+    const modpackHints = await getModpackLaunchHints(profile)
+    if (modpackHints?.loader && (modpackHints.loader !== profile.loader || (modpackHints.loaderVersion || '') !== (profile.loaderVersion || ''))) {
+      profile = {
+        ...profile,
+        loader: modpackHints.loader,
+        loaderVersion: modpackHints.loaderVersion || ''
+      }
+      await saveProfile(profile)
+      broadcastLaunchProgress({ message: `Профиль модпака синхронизирован: ${profile.loader}${profile.loaderVersion ? ` ${profile.loaderVersion}` : ''}` })
+    }
+  } catch (error) {
+    console.warn('Failed to sync modpack launch hints:', error && error.message)
   }
-  await createLaunchConsoleWindow()
 
+  const launcherSettings = await getSettings()
   const javaCompatibilityRange = await getJavaCompatibilityRange(profile.versionId)
   broadcastLaunchProgress({ message: `Требуемая Java: ${formatJavaCompatibilityRange(javaCompatibilityRange)}`, phase: 'preparing' })
   const javaPath = await findJavaPath(
-    profile.javaPath || '',
+    profile.javaPath || launcherSettings.javaPath || '',
     javaCompatibilityRange.minMajor,
     javaCompatibilityRange.maxMajor,
     event
   )
   const launcher = new Client()
   const root = path.join(userData, 'minecraft')
-  const launcherSettings = await getSettings()
-  const authState = await readJson(authPath, {})
+  const boostGameDirectory = profile.modpackPath || root
+  const kuroBoostPlan = await prepareKuroBoostPlan(profile, launcherSettings, boostGameDirectory)
+  if (kuroBoostPlan.enabled) {
+    const gpuLabel = kuroBoostPlan.hardware.gpu?.[0]?.name || 'GPU не определён'
+    broadcastLaunchProgress({
+      message: `KuroBoost: AI Optimized • ${kuroBoostPlan.hardware.cpu.cores} потоков CPU • RAM ${kuroBoostPlan.hardware.ram.total} GB • ${gpuLabel}`,
+      phase: 'preparing'
+    })
+    for (const warning of kuroBoostPlan.warnings.slice(0, 4)) {
+      broadcastLaunchProgress({ message: `KuroBoost: ${warning}`, tone: 'warning', phase: 'preparing' })
+    }
+  }
+  let authState = await readJson(authPath, {})
 
-  const profileName = profile.username || authState.name || 'KuroPlayer'
+  const profileName = normalizeMinecraftUsername(launcherProfileNameOverride)
+    || normalizeMinecraftUsername(launcherSettings.profileName)
+    || normalizeMinecraftUsername(authState.name)
+    || normalizeMinecraftUsername(profile.username)
+    || 'KuroPlayer'
   let authorization = null
   let isOfflineFallback = false
 
@@ -2297,7 +3293,9 @@ async function launchGame(profile, event) {
   let installedLoaderId = null
   let installedLoaderVersion = null
   let installedForgeInstallerJar = null
+  let installedForgeClientJar = null
   let installedQuiltRemappedJar = null
+  let installedNeoForgeArgsFile = null
 
   // Ensure base version JSON/jar available so installer and MCLC have a fallback
   try {
@@ -2328,8 +3326,7 @@ async function launchGame(profile, event) {
         })
         installedLoaderId = installedVersionId || null
       } catch (e) {
-        console.warn('Fabric install warning:', e && e.message, 'continuing with base version')
-        installedLoaderId = null
+        throw new Error(`Не удалось установить Fabric ${loaderVersion}: ${e && e.message ? e.message : e}`)
       }
       
       if (verboseLaunchLogging) console.log('Fabric setup completed, version:', versionInfo.number)
@@ -2368,9 +3365,15 @@ async function launchGame(profile, event) {
       if (verboseLaunchLogging) console.log('Forge: installing', artifactName, 'for', profile.versionId)
 
       try {
-        const installedVersionId = await installForge(selected, root, { mcversion: profile.versionId })
+        const installedVersionId = await installForge(selected, root, { mcversion: profile.versionId, java: javaPath })
         installedLoaderId = installedVersionId || `forge-${artifactName}`
         try {
+          const expectedForgeClientJar = path.join(root, 'libraries', 'net', 'minecraftforge', 'forge', artifactName, `forge-${artifactName}-client.jar`)
+          if (fsSync.existsSync(expectedForgeClientJar)) {
+            installedForgeClientJar = expectedForgeClientJar
+            if (verboseLaunchLogging) console.log('Found forge client jar:', installedForgeClientJar)
+          }
+
           // Try expected path first using computed artifact folder
           const expectedForgeJar = path.join(root, 'libraries', 'net', 'minecraftforge', 'forge', artifactName, `forge-${artifactName}-installer.jar`)
           if (fsSync.existsSync(expectedForgeJar)) {
@@ -2388,8 +3391,7 @@ async function launchGame(profile, event) {
           console.warn('Failed to locate forge installer jar:', err && (err.stack || err.message))
         }
       } catch (e) {
-        console.warn('Forge install warning:', e && (e.stack || e.message), 'will try with base version')
-        installedLoaderId = null
+        throw new Error(`Не удалось установить Forge ${installedLoaderVersion || ''}: ${e && e.message ? e.message : e}`)
       }
       
       if (verboseLaunchLogging) console.log('Forge setup completed, version:', versionInfo.number)
@@ -2405,17 +3407,31 @@ async function launchGame(profile, event) {
       const neoVersions = Array.isArray(result)
         ? result
         : result?.versions || []
-      const stableVersions = neoVersions.filter(v => v.stable).sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }))
-      if (stableVersions.length === 0) {
+      const requestedVersion = profile.loaderVersion
+        ? neoVersions.find((item) => item?.version === profile.loaderVersion)
+        : null
+      const stableVersions = neoVersions
+        .filter((item) => item?.stable)
+        .sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }))
+      const candidateVersions = [
+        ...(requestedVersion ? [requestedVersion] : []),
+        ...stableVersions.filter((item) => item.version !== requestedVersion?.version)
+      ]
+      if (candidateVersions.length === 0) {
         throw new Error(`No stable NeoForge version found for Minecraft ${profile.versionId}`)
       }
       
-      for (const selected of stableVersions) {
+      for (const selected of candidateVersions) {
         installedLoaderVersion = selected.version
         if (verboseLaunchLogging) console.log('NeoForge: trying to install', selected.version, 'for', profile.versionId)
         try {
-          const installedVersionId = await installNeoForged('neoforge', selected.version, root, { mcversion: profile.versionId })
+          const installedVersionId = await installNeoForged('neoforge', selected.version, root, { mcversion: profile.versionId, java: javaPath })
           installedLoaderId = installedVersionId || `neoforge-${selected.version}`
+          const argsFileName = process.platform === 'win32' ? 'win_args.txt' : 'unix_args.txt'
+          const argsFilePath = path.join(root, 'libraries', 'net', 'neoforged', 'neoforge', selected.version, argsFileName)
+          if (fsSync.existsSync(argsFilePath)) {
+            installedNeoForgeArgsFile = argsFilePath
+          }
           if (verboseLaunchLogging) console.log('NeoForge setup completed, version:', installedLoaderId)
           break
         } catch (e) {
@@ -2424,7 +3440,7 @@ async function launchGame(profile, event) {
       }
       
       if (!installedLoaderId) {
-        console.warn('All NeoForge versions failed to install, falling back to base version')
+        throw new Error('Не удалось установить ни одну совместимую версию NeoForge')
       }
     } catch (error) {
       console.error('NeoForge install error:', error)
@@ -2463,8 +3479,7 @@ async function launchGame(profile, event) {
           console.warn('Failed to locate quilt remapped jar:', err && err.message)
         }
       } catch (e) {
-        console.warn('Quilt install warning:', e && e.message, 'continuing with base version')
-        installedLoaderId = `quilt-${loaderVersion}`
+        throw new Error(`Не удалось установить Quilt ${loaderVersion}: ${e && e.message ? e.message : e}`)
       }
       
       if (verboseLaunchLogging) console.log('Quilt setup completed, version:', versionInfo.number)
@@ -2547,7 +3562,7 @@ async function launchGame(profile, event) {
 
   // Compute safe RAM to use for JVM based on user preference and system memory
   function parseMemoryGB(value) {
-    if (value === 'auto' || value === 'Auto' || value === 'AUTO') {
+    if (value === 'auto' || value === 'Auto' || value === 'AUTO' || value === 'global') {
       return null
     }
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -2565,6 +3580,49 @@ async function launchGame(profile, event) {
       }
     }
     return null
+  }
+
+  function normalizeRamPreference(value) {
+    if (value === null || value === undefined) return 'global'
+    if (typeof value === 'number' && Number.isFinite(value)) return `${Math.max(1, Math.floor(value))}G`
+    if (typeof value !== 'string') return 'global'
+
+    const text = value.trim()
+    if (!text) return 'global'
+
+    const lower = text.toLowerCase()
+    if (lower === 'global' || lower === 'launcher' || lower === 'settings') return 'global'
+    if (lower === 'auto') return 'auto'
+
+    const match = text.toUpperCase().match(/^(\d+)\s*(G|GB|M|MB)?$/)
+    if (!match) return 'global'
+
+    const amount = Number(match[1])
+    const unit = match[2] || 'G'
+    if (unit === 'M' || unit === 'MB') return `${Math.max(1, Math.floor(amount / 1024))}G`
+    return `${Math.max(1, amount)}G`
+  }
+
+  function resolveRamPreference(profileRam, settingsRam) {
+    const normalizedProfileRam = normalizeRamPreference(profileRam)
+    const normalizedSettingsRam = normalizeRamPreference(settingsRam)
+
+    if (normalizedProfileRam !== 'global') {
+      return {
+        requested: normalizedProfileRam,
+        source: 'profile',
+        profile: normalizedProfileRam,
+        global: normalizedSettingsRam
+      }
+    }
+
+    const requested = normalizedSettingsRam === 'global' ? 'auto' : normalizedSettingsRam
+    return {
+      requested,
+      source: normalizedSettingsRam === 'global' ? 'auto' : 'launcher',
+      profile: normalizedProfileRam,
+      global: normalizedSettingsRam
+    }
   }
 
   function computeSafeRam(requestedValue, reserveGB = 3) {
@@ -2600,7 +3658,11 @@ async function launchGame(profile, event) {
     return `${Math.max(2, maxAllowed)}G`
   }
 
-  const safeRam = computeSafeRam(profile.ram)
+  const baseRamPreference = resolveRamPreference(profile.ram, launcherSettings.ram)
+  const ramPreference = kuroBoostPlan.enabled && baseRamPreference.source !== 'profile'
+    ? { ...baseRamPreference, requested: kuroBoostPlan.recommendedRam, source: 'kuroboost' }
+    : baseRamPreference
+  const safeRam = computeSafeRam(ramPreference.requested, kuroBoostPlan.enabled && kuroBoostPlan.hardware.laptop ? 4 : 3)
 
   // Determine base version JSON path (could be either <id>.json or version.json)
   const baseJsonCandidate = path.join(versionsPath, profile.versionId, `${profile.versionId}.json`)
@@ -2628,17 +3690,21 @@ async function launchGame(profile, event) {
     const loaderDirExists = fsSync.existsSync(path.join(versionsPath, installedLoaderId))
     if (verboseLaunchLogging) console.log(`[Launch] Loader directory exists: ${loaderDirExists}`)
     if (!loaderDirExists) {
-      if (verboseLaunchLogging) console.log(`[Launch] WARNING: Loader directory does not exist! Falling back to base version.`)
-      installedLoaderId = null
+      broadcastLaunchProgress({ message: `Папка установленного загрузчика не найдена: ${installedLoaderId}`, tone: 'error', phase: 'error' })
+      throw new Error(`Папка установленного загрузчика не найдена: ${installedLoaderId}`)
     }
   }
-  
-  const versionJsonOverride = (installedLoaderId && usesModLoader) ? null : baseVersionJsonPath
+
+  const versionJsonOverride = baseVersionJsonPath
   const baseJar = path.join(versionsPath, profile.versionId, `${profile.versionId}.jar`)
   
-  // For Quilt, prefer vanilla jar over remapped (Quilt will remap internally)
+  // Modern Forge bootstraps Minecraft as its own module. Putting the vanilla
+  // client jar on Java's classpath creates a second automatic module
+  // (_1._19._2) with the same packages and crashes during module resolution.
   let mcJar = baseJar
-  if (profile.loader === 'quilt') {
+  if (profile.loader === 'forge' && installedForgeClientJar) {
+    mcJar = installedForgeClientJar
+  } else if (profile.loader === 'quilt') {
     mcJar = baseJar
   } else if (installedQuiltRemappedJar) {
     mcJar = installedQuiltRemappedJar
@@ -2673,14 +3739,333 @@ async function launchGame(profile, event) {
   }
 
   options.customArgs = options.customArgs || []
-  // Remove any existing -Xmx/-Xms to avoid duplicates/conflicts
-  options.customArgs = options.customArgs.filter(a => !(typeof a === 'string' && (a.startsWith('-Xmx') || a.startsWith('-Xms'))))
-  options.customArgs.push('-Xmx' + safeRam)
-  options.customArgs.push('-Xms' + safeRam)
-  // Add conservative stack size and code cache limits to reduce native memory pressure
-  if (!options.customArgs.some(a => typeof a === 'string' && a.startsWith('-Xss'))) options.customArgs.push('-Xss512k')
+  // MCLC already emits -Xmx/-Xms from options.memory. Do not add stack or
+  // metaspace caps here: large modpacks can overflow a small thread stack
+  // during Fabric entrypoint/mixin initialization.
+  options.customArgs = options.customArgs.filter(a => !(typeof a === 'string' && (
+    a.startsWith('-Xmx') ||
+    a.startsWith('-Xms') ||
+    a.startsWith('-Xss') ||
+    a.startsWith('-XX:MaxMetaspaceSize')
+  )))
   if (!options.customArgs.some(a => typeof a === 'string' && a.startsWith('-XX:ReservedCodeCacheSize'))) options.customArgs.push('-XX:ReservedCodeCacheSize=256M')
-  if (!options.customArgs.some(a => typeof a === 'string' && a.startsWith('-XX:MaxMetaspaceSize'))) options.customArgs.push('-XX:MaxMetaspaceSize=512M')
+
+  if (installedLoaderId && usesModLoader) {
+    let resolvedLoaderJvmArgs = []
+    if (profile.loader === 'neoforge' && installedNeoForgeArgsFile) {
+      resolvedLoaderJvmArgs = parseJavaArgsFile(installedNeoForgeArgsFile)
+    }
+    if (resolvedLoaderJvmArgs.length === 0) {
+      const loaderJsonPath = path.join(versionsPath, installedLoaderId, `${installedLoaderId}.json`)
+      resolvedLoaderJvmArgs = resolveLoaderJvmArgs(loaderJsonPath, {
+        loaderId: installedLoaderId,
+        baseVersionId: profile.versionId,
+        root
+      })
+    }
+
+    if (profile.loader === 'neoforge') {
+      try {
+        const baseVersionJson = baseVersionJsonPath && fsSync.existsSync(baseVersionJsonPath)
+          ? JSON.parse(fsSync.readFileSync(baseVersionJsonPath, 'utf-8'))
+          : null
+        const legacyClassPathEntries = getBaseLibraryRelativePaths(baseVersionJson)
+        if (fsSync.existsSync(baseJar)) {
+          legacyClassPathEntries.push(path.relative(root, baseJar).replace(/\\/g, '/'))
+        }
+
+        appendJvmPropertyList(resolvedLoaderJvmArgs, 'legacyClassPath', legacyClassPathEntries)
+        if (verboseLaunchLogging) console.log('NeoForge legacyClassPath augmented with vanilla libraries:', legacyClassPathEntries.length)
+      } catch (e) {
+        console.warn('Failed to augment NeoForge legacy classpath:', e && e.message)
+      }
+    }
+
+    // NeoForge early display loads LWJGL classes from the bootstrap module layer.
+    // Reuse the same LWJGL version as the inherited vanilla version so bootstrap,
+    // legacy classpath, and NeoForge game/plugin layers all see the same jars.
+    // Keep native library handling untouched here.
+    if (profile.loader === 'neoforge') {
+      try {
+        const baseVersionJsonPath = path.join(versionsPath, profile.versionId, `${profile.versionId}.json`)
+        let preferredLwjglVersion = null
+
+        if (fsSync.existsSync(baseVersionJsonPath)) {
+          const baseVersionJson = JSON.parse(fsSync.readFileSync(baseVersionJsonPath, 'utf-8'))
+          const lwjglCore = Array.isArray(baseVersionJson?.libraries)
+            ? baseVersionJson.libraries.find((entry) => typeof entry?.name === 'string' && entry.name.startsWith('org.lwjgl:lwjgl:'))
+            : null
+          if (lwjglCore?.name) {
+            preferredLwjglVersion = lwjglCore.name.split(':')[2] || null
+          }
+        }
+
+        if (preferredLwjglVersion) {
+          const lwjglBase = path.join(root, 'libraries', 'org', 'lwjgl')
+          if (fsSync.existsSync(lwjglBase)) {
+            const lwjglJars = []
+              const lwjglNativeJars = []
+            const artifacts = fsSync.readdirSync(lwjglBase, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .map((entry) => entry.name)
+
+            for (const artifact of artifacts) {
+              const artifactDir = path.join(lwjglBase, artifact, preferredLwjglVersion)
+              if (!fsSync.existsSync(artifactDir)) continue
+              const files = fsSync.readdirSync(artifactDir)
+              for (const fileName of files) {
+                const lower = fileName.toLowerCase()
+                if (!lower.endsWith('.jar')) continue
+                if (/-natives(?:[-.]|$)/.test(lower)) {
+                  const relPath = path.relative(root, path.join(artifactDir, fileName)).replace(/\\/g, '/')
+                  lwjglNativeJars.push(relPath)
+                  continue
+                }
+                const relPath = path.relative(root, path.join(artifactDir, fileName)).replace(/\\/g, '/')
+                lwjglJars.push(relPath)
+              }
+            }
+
+            const uniqueLwjglJars = Array.from(new Set(lwjglJars))
+            if (uniqueLwjglJars.length > 0) {
+              const sep = process.platform === 'win32' ? ';' : ':'
+              const joined = uniqueLwjglJars.join(sep)
+              const appendPropertyList = (propertyName) => {
+                const prefix = `-D${propertyName}=`
+                const propertyIndex = resolvedLoaderJvmArgs.findIndex(
+                  (item) => typeof item === 'string' && item.startsWith(prefix)
+                )
+                if (propertyIndex >= 0) {
+                  const currentValue = resolvedLoaderJvmArgs[propertyIndex].slice(prefix.length)
+                  const mergedValue = currentValue
+                    ? Array.from(new Set([...currentValue.split(sep).filter(Boolean), ...uniqueLwjglJars])).join(sep)
+                    : joined
+                  resolvedLoaderJvmArgs[propertyIndex] = `${prefix}${mergedValue}`
+                } else {
+                  resolvedLoaderJvmArgs.push(`${prefix}${joined}`)
+                }
+              }
+
+              const modulePathIndex = resolvedLoaderJvmArgs.findIndex((item) => item === '-p' || item === '--module-path')
+              if (modulePathIndex >= 0 && typeof resolvedLoaderJvmArgs[modulePathIndex + 1] === 'string') {
+                const mergedModulePath = Array.from(new Set([
+                  ...resolvedLoaderJvmArgs[modulePathIndex + 1].split(sep).filter(Boolean),
+                  ...uniqueLwjglJars
+                ])).join(sep)
+                resolvedLoaderJvmArgs[modulePathIndex + 1] = mergedModulePath
+              } else {
+                const modulePathEqIndex = resolvedLoaderJvmArgs.findIndex((item) => typeof item === 'string' && item.startsWith('--module-path='))
+                if (modulePathEqIndex >= 0) {
+                  const currentValue = resolvedLoaderJvmArgs[modulePathEqIndex].slice('--module-path='.length)
+                  const mergedModulePath = Array.from(new Set([
+                    ...currentValue.split(sep).filter(Boolean),
+                    ...uniqueLwjglJars
+                  ])).join(sep)
+                  resolvedLoaderJvmArgs[modulePathEqIndex] = `--module-path=${mergedModulePath}`
+                } else {
+                  // Skip adding explicit module-path here — in some environments
+                  // placing LWJGL jars on both the module-path and the classpath
+                  // causes the JVM/bootstrap launcher to fail with a duplicate
+                  // module error. Rely on the fml.* property lists instead.
+                  if (verboseLaunchLogging) console.log('Skipping adding -p module-path to avoid LWJGL duplication')
+                }
+              }
+
+              appendPropertyList('legacyClassPath')
+              appendPropertyList('fml.gameLayerLibraries')
+              appendPropertyList('fml.pluginLayerLibraries')
+
+              if (verboseLaunchLogging) {
+                console.log('NeoForge LWJGL visibility version:', preferredLwjglVersion)
+                console.log('NeoForge LWJGL jars added:', uniqueLwjglJars)
+                if (lwjglNativeJars && lwjglNativeJars.length > 0) console.log('NeoForge LWJGL native jars found:', Array.from(new Set(lwjglNativeJars)))
+              }
+
+              // If native jars were discovered, extract them to a dedicated
+              // folder and set org.lwjgl.librarypath so LWJGL can load the DLLs.
+              try {
+                const uniqueNative = Array.from(new Set(lwjglNativeJars || []))
+                if (uniqueNative.length > 0) {
+                  const nativeDest = path.join(root, 'native-libs', `lwjgl-${preferredLwjglVersion}`)
+                  fsSync.mkdirSync(nativeDest, { recursive: true })
+                  for (const rel of uniqueNative) {
+                    const jarFull = path.join(root, rel.replace(/\//g, path.sep))
+                    try {
+                      if (fsSync.existsSync(jarFull)) {
+                        const zip = new AdmZip(jarFull)
+                        zip.extractAllTo(nativeDest, true)
+                      }
+                    } catch (e) {
+                      if (verboseLaunchLogging) console.warn('Failed to extract native jar', jarFull, e && e.message)
+                    }
+                  }
+                  // Ensure LWJGL will search the extracted natives
+                  if (!options.customArgs.some(a => typeof a === 'string' && a.startsWith('-Dorg.lwjgl.librarypath='))) {
+                    options.customArgs.push('-Dorg.lwjgl.librarypath=' + nativeDest)
+                  }
+                  if (verboseLaunchLogging) console.log('Extracted LWJGL natives to', nativeDest)
+                }
+              } catch (e) {
+                if (verboseLaunchLogging) console.warn('Failed to handle LWJGL native jars:', e && e.message)
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to augment NeoForge LWJGL visibility:', e && e.message)
+      }
+    }
+
+        // For NeoForge: filter module-path entries to remove only LWJGL jars.
+        // Some modules (e.g. asm-commons used by Nashorn) must remain on the
+        // module-path. Removing the entire module-path breaks module resolution.
+        if (profile.loader === 'neoforge') {
+          try {
+            const sep = process.platform === 'win32' ? ';' : ':'
+            const filtered = []
+            for (let i = 0; i < resolvedLoaderJvmArgs.length; i++) {
+              const token = resolvedLoaderJvmArgs[i]
+              if (!token) continue
+
+              // Handle split form: '-p' or '--module-path' followed by a path string
+              if ((token === '-p' || token === '--module-path') && typeof resolvedLoaderJvmArgs[i + 1] === 'string') {
+                const value = resolvedLoaderJvmArgs[i + 1]
+                const parts = value.split(sep).filter(Boolean)
+                // keep all parts except ones that reference org/lwjgl
+                const kept = parts.filter(p => p.indexOf('org/lwjgl') === -1 && p.indexOf('org\\lwjgl') === -1)
+                if (kept.length > 0) {
+                  filtered.push(token)
+                  filtered.push(kept.join(sep))
+                }
+                i += 1
+                continue
+              }
+
+              // Handle single-token form: --module-path=...
+              if (typeof token === 'string' && token.startsWith('--module-path=')) {
+                const value = token.slice('--module-path='.length)
+                const parts = value.split(sep).filter(Boolean)
+                const kept = parts.filter(p => p.indexOf('org/lwjgl') === -1 && p.indexOf('org\\lwjgl') === -1)
+                if (kept.length > 0) {
+                  filtered.push(`--module-path=${kept.join(sep)}`)
+                }
+                continue
+              }
+
+              // Otherwise keep the token
+              filtered.push(token)
+            }
+            resolvedLoaderJvmArgs = filtered
+            if (verboseLaunchLogging) console.log('NeoForge: filtered module-path entries (removed LWJGL jars)')
+          } catch (e) {
+            if (verboseLaunchLogging) console.warn('NeoForge module-path selective filtering failed:', e && e.message)
+          }
+        }
+
+        if (profile.loader === 'neoforge') {
+          // NeoForge can need broad unnamed-module opens on some Java builds.
+          // Forge 1.19.x expects the official cpw.mods.securejarhandler target.
+          try {
+            if (Array.isArray(resolvedLoaderJvmArgs) && resolvedLoaderJvmArgs.length > 0) {
+              const normalized = []
+              for (let i = 0; i < resolvedLoaderJvmArgs.length; i++) {
+                const t = resolvedLoaderJvmArgs[i]
+                if (!t) {
+                  normalized.push(t)
+                  continue
+                }
+
+                if (typeof t === 'string') {
+                  if ((t.startsWith('--add-opens=') || t.startsWith('--add-exports=')) && t.endsWith('=cpw.mods.securejarhandler')) {
+                    normalized.push(t.replace(/=cpw\.mods\.securejarhandler$/, '=ALL-UNNAMED'))
+                    continue
+                  }
+
+                  // Handle split form: '--add-opens' followed by 'pkg=module'
+                  if ((t === '--add-opens' || t === '--add-exports') && typeof resolvedLoaderJvmArgs[i + 1] === 'string') {
+                    const next = resolvedLoaderJvmArgs[i + 1]
+                    if (next.endsWith('=cpw.mods.securejarhandler')) {
+                      normalized.push(t)
+                      normalized.push(next.replace(/=cpw\.mods\.securejarhandler$/, '=ALL-UNNAMED'))
+                      i += 1
+                      continue
+                    }
+                  }
+                }
+
+                normalized.push(t)
+              }
+              resolvedLoaderJvmArgs = normalized
+              if (verboseLaunchLogging) console.log('NeoForge normalized securejarhandler opens/exports to ALL-UNNAMED')
+            }
+          } catch (e) {
+            if (verboseLaunchLogging) console.warn('Failed to normalize add-opens/exports:', e && e.message)
+          }
+        }
+
+        // Sanitize loader-provided arguments: strip application args and main-class tokens
+    const sanitizeLoaderArgs = (arr) => {
+      if (!Array.isArray(arr)) return []
+      const out = []
+      const appArgsToStrip = new Set(['--username','--version','--gameDir','--assetsDir','--assetIndex','--uuid','--accessToken','--clientId','--xuid','--userType','--versionType','--fullscreen'])
+      for (let i = 0; i < arr.length; i++) {
+        const t = arr[i]
+        if (!t) continue
+
+        // If we hit a main-class (BootstrapLauncher) or similar, the rest are application args — stop.
+        if (typeof t === 'string' && /BootstrapLauncher/.test(t)) {
+          break
+        }
+
+        // Remove explicit launchTarget flags/values (either separate or =value form)
+        if (t === '--launchTarget') { i++; continue }
+        if (typeof t === 'string' && t.startsWith('--launchTarget=')) continue
+
+        // Strip common application args that MCLC will supply (and their values)
+        if (appArgsToStrip.has(t)) { i++; continue }
+
+        out.push(t)
+      }
+      return out
+    }
+
+    const cleaned = sanitizeLoaderArgs(resolvedLoaderJvmArgs)
+    options.customArgs.push(...cleaned)
+
+    // If securejarhandler is present on the module-path, ensure we grant
+    // it reflective access to java.base internals it needs (e.g. IMPL_LOOKUP).
+    try {
+      const sep = process.platform === 'win32' ? ';' : ':'
+      let secureOnModulePath = false
+      for (let i = 0; i < resolvedLoaderJvmArgs.length; i++) {
+        const it = resolvedLoaderJvmArgs[i]
+        if (!it) continue
+        if ((it === '-p' || it === '--module-path') && typeof resolvedLoaderJvmArgs[i + 1] === 'string') {
+          if (resolvedLoaderJvmArgs[i + 1].indexOf('securejarhandler') !== -1) { secureOnModulePath = true; break }
+          i += 1
+          continue
+        }
+        if (typeof it === 'string' && it.startsWith('--module-path=')) {
+          const val = it.slice('--module-path='.length)
+          if (val.indexOf('securejarhandler') !== -1) { secureOnModulePath = true; break }
+        }
+      }
+
+      if (secureOnModulePath) {
+        const needAdds = [
+          '--add-opens=java.base/java.lang.invoke=cpw.mods.securejarhandler',
+          '--add-opens=java.base/java.util.jar=cpw.mods.securejarhandler',
+          '--add-exports=java.base/sun.security.util=cpw.mods.securejarhandler'
+        ]
+        for (const a of needAdds) {
+          if (!options.customArgs.includes(a)) options.customArgs.push(a)
+        }
+        if (verboseLaunchLogging) console.log('Added targeted add-opens/exports for cpw.mods.securejarhandler')
+      }
+    } catch (e) {
+      if (verboseLaunchLogging) console.warn('Failed to add securejarhandler opens/exports:', e && e.message)
+    }
+  }
 
   // If we have user_properties for custom skin injection, pass it as game launch args, not JVM args.
   if (authorization && authorization.user_properties && authorization.user_properties !== '{}') {
@@ -2707,7 +4092,13 @@ async function launchGame(profile, event) {
   if (verboseLaunchLogging) console.log('RAM debug:', { safeRam, memory: options.memory, customArgs: options.customArgs.filter(a => typeof a === 'string' && a.startsWith('-Xm')) })
   if (verboseLaunchLogging) console.log('customLaunchArgs:', options.customLaunchArgs)
 
-  if (installedForgeInstallerJar) options.forge = installedForgeInstallerJar
+  // Modern Forge is installed by @xmcl/installer as a normal custom version
+  // directory with its own version json. Passing the installer jar to MCLC at
+  // this point makes it generate a ForgeWrapper launch path on top of the
+  // installed profile, which can exit before Minecraft writes latest.log.
+  if (profile.loader === 'forge' && installedForgeInstallerJar && !installedLoaderId) {
+    options.forge = installedForgeInstallerJar
+  }
 
   // Add Quilt-specific JVM args to work around service loader issues
   if (profile.loader === 'quilt') {
@@ -2738,48 +4129,133 @@ async function launchGame(profile, event) {
 
   if (profile.loader === 'neoforge') {
     if (!Array.isArray(options.customArgs)) options.customArgs = []
-    const libDir = path.join(userData, 'minecraft', 'libraries').replace(/\\/g, '\\\\')
-    options.customArgs.push('-DlibraryDirectory=' + libDir)
-    // HeapBaseMinAddress and UseCompressedOops moved below for all mod loaders
-    // Add opens for Java 17+ module system
-    options.customArgs.push('--add-opens', 'java.base/java.lang.invoke=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.lang=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.io=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.util=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.util.jar=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.util.zip=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.net=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.nio=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.security=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.util.concurrent=ALL-UNNAMED')
-    options.customArgs.push('--add-opens', 'java.base/java.util.concurrent.atomic=ALL-UNNAMED')
-    options.customArgs.push('-Dfml.ignorePatchDiscrepancies=false')
-    options.customArgs.push('-Dfml.ignoreInvalidMinecraftCertificates=false')
+    if (!installedNeoForgeArgsFile) {
+      const libDir = path.join(userData, 'minecraft', 'libraries').replace(/\\/g, '\\\\')
+      options.customArgs.push('-DlibraryDirectory=' + libDir)
+      // HeapBaseMinAddress and UseCompressedOops moved below for all mod loaders
+      // Add opens for Java 17+ module system as a fallback if official arg file is unavailable
+      options.customArgs.push('--add-opens', 'java.base/java.lang.invoke=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.lang=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.io=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.util=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.util.jar=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.util.zip=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.net=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.nio=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.security=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.util.concurrent=ALL-UNNAMED')
+      options.customArgs.push('--add-opens', 'java.base/java.util.concurrent.atomic=ALL-UNNAMED')
+      options.customArgs.push('-Dfml.ignorePatchDiscrepancies=false')
+      options.customArgs.push('-Dfml.ignoreInvalidMinecraftCertificates=false')
+    }
     if (verboseLaunchLogging) console.log('NeoForge custom args:', options.customArgs)
   }
 
-  // Add address space fixes for all mod loaders (Forge, Quilt, NeoForge, Fabric)
-  if (usesModLoader) {
-    if (!Array.isArray(options.customArgs)) options.customArgs = []
-    // Fix for virtual address space issues - place heap above 32GB to avoid conflict with native heaps
-    if (!options.customArgs.some(a => typeof a === 'string' && a.startsWith('-XX:HeapBaseMinAddress'))) {
-      options.customArgs.push('-XX:HeapBaseMinAddress=8G')
-    }
-    if (!options.customArgs.some(a => typeof a === 'string' && a.includes('UseCompressedOops'))) {
-      options.customArgs.push('-XX:-UseCompressedOops')
-    }
-    if (verboseLaunchLogging) console.log('Mod loader address space fix applied')
+  // Do not force low-level heap placement or compressed-oops overrides for mod loaders.
+  // These flags can destabilize LWJGL/HotSpot startup on some Windows systems.
+  if (usesModLoader && Array.isArray(options.customArgs)) {
+    options.customArgs = options.customArgs.filter((arg) => {
+      if (typeof arg !== 'string') return true
+      return !arg.startsWith('-XX:HeapBaseMinAddress') &&
+        arg !== '-XX:-UseCompressedOops' &&
+        !arg.startsWith('-Xmx') &&
+        !arg.startsWith('-Xms') &&
+        !arg.startsWith('-Xss') &&
+        !arg.startsWith('-XX:MaxMetaspaceSize')
+    })
+    if (verboseLaunchLogging) console.log('Mod loader JVM flags sanitized')
   }
 
-  const requestedGB = profile.ram === 'auto' ? -1 : parseMemoryGB(profile.ram)
+  if (kuroBoostPlan.enabled && Array.isArray(options.customArgs)) {
+    options.customArgs.push(...kuroBoostPlan.jvmArgs)
+    broadcastLaunchProgress({
+      message: `KuroBoost: JVM профиль применён (${kuroBoostPlan.jvmArgs.length} флагов)`,
+      phase: 'preparing'
+    })
+  }
+
+  if (Array.isArray(options.customArgs)) {
+    options.customArgs = dedupeJvmArgsPreservingPairs(options.customArgs)
+  }
+
+  const requestedGB = ramPreference.requested === 'auto' ? -1 : parseMemoryGB(ramPreference.requested)
   if (parseMemoryGB(safeRam) < (requestedGB > 0 ? requestedGB : 999)) {
     broadcastLaunchProgress({ message: `Память скорректирована до ${safeRam}`, phase: 'preparing' })
   }
+  broadcastLaunchProgress({
+    message: ramPreference.source === 'launcher'
+      ? `RAM запуска: ${safeRam} (из настроек лаунчера)`
+      : ramPreference.source === 'profile'
+        ? `RAM запуска: ${safeRam} (из профиля)`
+        : ramPreference.source === 'kuroboost'
+          ? `RAM запуска: ${safeRam} (KuroBoost AI)`
+          : `RAM запуска: ${safeRam} (авто)`,
+    phase: 'preparing'
+  })
+
+  const gameDirectoryForLaunch = profile.modpackPath || root
+  if (kuroBoostPlan.enabled) {
+    await applyKuroBoostOptions(gameDirectoryForLaunch, kuroBoostPlan.gameOptions)
+    await writeKuroBoostPlan(gameDirectoryForLaunch, kuroBoostPlan)
+    broadcastLaunchProgress({
+      message: `KuroBoost: options.txt обновлён (render ${kuroBoostPlan.gameOptions.renderDistance}, fps ${kuroBoostPlan.gameOptions.maxFps})`,
+      phase: 'preparing'
+    })
+  }
+  const launchLogPath = await beginLaunchLog(gameDirectoryForLaunch, {
+    profile: {
+      id: profile.id,
+      name: profile.name,
+      versionId: profile.versionId,
+      loader: profile.loader,
+      loaderVersion: profile.loaderVersion || installedLoaderVersion || null,
+      ram: {
+        profile: ramPreference.profile,
+        launcher: ramPreference.global,
+        requested: ramPreference.requested,
+        effective: safeRam,
+        source: ramPreference.source
+      },
+      modpackPath: profile.modpackPath || null
+    },
+    javaPath,
+    root,
+    version: versionOption,
+    overrides: options.overrides,
+    forge: options.forge || null,
+    forgeClientJar: installedForgeClientJar || null,
+    customArgs: options.customArgs || [],
+    customLaunchArgs: options.customLaunchArgs || [],
+    kuroBoost: kuroBoostPlan.enabled ? {
+      preset: kuroBoostPlan.preset,
+      recommendedRam: kuroBoostPlan.recommendedRam,
+      gameOptions: kuroBoostPlan.gameOptions,
+      warnings: kuroBoostPlan.warnings
+    } : { enabled: false }
+  }, authorization)
+  if (launchLogPath) {
+    broadcastLaunchProgress({ message: `Лог запуска: ${launchLogPath}`, stream: 'log', phase: 'preparing' })
+  }
+
+  let launcherFailureDetail = ''
+  launcher.on('arguments', (args) => {
+    const list = Array.isArray(args) ? args : [args]
+    appendLaunchLog(launchLogPath, 'arguments', list.join(' '), authorization)
+  })
 
   launcher.on('debug', (data) => {
+    const text = data.toString()
+    appendLaunchLog(launchLogPath, 'debug', text, authorization)
+    const failurePrefix = '[MCLC]: Failed to start due to '
+    if (text.includes(failurePrefix)) {
+      launcherFailureDetail = text.slice(text.indexOf(failurePrefix) + failurePrefix.length).trim()
+      console.warn('MCLC startup failure:', launcherFailureDetail)
+    }
     if (verboseLaunchLogging) console.debug('Launcher debug:', data)
-    broadcastLaunchProgress({ message: data.toString(), stream: 'log', phase: 'preparing' })
+    if (!text.includes('[MCLC]: Launching with arguments')) {
+      broadcastLaunchProgress({ message: text, stream: 'log', phase: 'preparing' })
+    }
   })
 
   launcher.on('progress', (data) => {
@@ -2808,18 +4284,30 @@ async function launchGame(profile, event) {
       message = String(data)
     }
 
+    appendLaunchLog(launchLogPath, 'progress', message, authorization)
     broadcastLaunchProgress({ message, progress, phase: 'preparing' })
   })
 
   launcher.on('data', (data) => {
     const text = data.toString()
+    appendLaunchLog(launchLogPath, 'minecraft', text, authorization)
     if (verboseLaunchLogging) console.log('Launcher data:', text)
     broadcastLaunchProgress({ message: text, stream: 'log', phase: 'preparing' })
   })
 
-  launcher.on('close', (code) => {
+  launcher.on('close', async (code) => {
+    appendLaunchLog(launchLogPath, 'close', `MCLC close event: ${code}`, authorization)
     if (code !== 0) {
-      broadcastLaunchProgress({ message: `Minecraft завершился с кодом ${code}`, tone: 'error', phase: 'error' })
+      const crashSummary = await summarizeLatestCrashReport(gameDirectoryForLaunch)
+      const launchSummary = crashSummary ? null : await summarizeLatestKuroLaunchLog(gameDirectoryForLaunch)
+      const failureSummary = crashSummary || launchSummary
+      broadcastLaunchProgress({
+        message: failureSummary?.message
+          ? `Minecraft завершился с кодом ${code}: ${failureSummary.message}`
+          : `Minecraft завершился с кодом ${code}`,
+        tone: 'error',
+        phase: 'error'
+      })
     }
   })
 
@@ -2852,63 +4340,81 @@ async function launchGame(profile, event) {
     }
     const child = await launcher.launch(options)
     if (!child) {
-      throw new Error('Не удалось запустить Minecraft. Проверьте Java и версию.')
+      appendLaunchLog(launchLogPath, 'error', launcherFailureDetail || 'launcher.launch returned no child process', authorization)
+      throw new Error(launcherFailureDetail || 'Не удалось запустить Minecraft. Проверьте Java и версию.')
     }
+    minecraftProcessActive = true
 
     broadcastLaunchProgress({
       message: 'Окно Minecraft открыто. Передаю управление игре...',
-      gameStarted: true,
-      phase: 'started'
+      gameStarted: true
     })
 
-    setTimeout(() => {
-      try {
-        launchConsoleWindow?.close()
-      } catch {}
-    }, 220)
+    if (mainWindow) {
+      setTimeout(() => {
+        try {
+          mainWindow?.hide()
+        } catch {}
+      }, 180)
+    }
 
     child.on('error', (error) => {
+      minecraftProcessActive = false
+      appendLaunchLog(launchLogPath, 'error', `Child process error: ${error.message}`, authorization)
       console.error('Launch error', error)
       broadcastLaunchProgress({ message: `Ошибка запуска: ${error.message}`, tone: 'error', phase: 'error' })
     })
 
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
+      minecraftProcessActive = false
+      appendLaunchLog(launchLogPath, 'close', `Minecraft process closed with code ${code}`, authorization)
       if (verboseLaunchLogging) console.log('Minecraft closed with code:', code)
 
       // Show launcher window again when Minecraft closes
       if (mainWindow) {
+        mainWindowShownAt = Date.now()
         mainWindow.show()
         mainWindow.focus()
       }
 
-      try {
-        launchConsoleWindow?.close()
-      } catch {}
+      const gameDirectory = gameDirectoryForLaunch
+      const crashSummary = code === 0 ? null : await summarizeLatestCrashReport(gameDirectory)
+      const launchSummary = code === 0 || crashSummary ? null : await summarizeLatestKuroLaunchLog(gameDirectory)
+      const failureSummary = crashSummary || launchSummary
+      if (crashSummary) {
+        console.warn('Latest Minecraft crash report:', crashSummary.path, crashSummary.message)
+      } else if (launchSummary) {
+        console.warn('Latest KuroLauncher launch log:', launchSummary.path, launchSummary.message)
+      }
 
-      // Send exit status to renderer
       const exitMessage = code === 0
         ? 'Игра завершена успешно'
-        : `Игра завершена с кодом ${code}`
+        : failureSummary?.message
+          ? `Игра завершена с кодом ${code}: ${failureSummary.message}`
+          : `Игра завершена с кодом ${code}`
 
-      broadcastLaunchProgress({ message: exitMessage, gameExited: true, phase: 'idle', tone: code === 0 ? 'success' : 'error' })
+      broadcastLaunchProgress({ message: exitMessage, gameExited: true })
     })
 
     return true
   } catch (launchError) {
+    appendLaunchLog(launchLogPath, 'error', `Launcher launch error: ${launchError.message}`, authorization)
     console.error('Launcher launch error:', launchError)
     if (mainWindow) {
       try {
+        mainWindowShownAt = Date.now()
         mainWindow.show()
         mainWindow.focus()
       } catch {}
     }
-    broadcastLaunchProgress({ message: `Не удалось запустить Minecraft: ${launchError.message}`, tone: 'error', phase: 'error' })
+    broadcastLaunchProgress({ message: `Не удалось запустить Minecraft: ${launchError.message}` })
     throw new Error(`Не удалось запустить Minecraft: ${launchError.message}`)
   }
 }
 
 async function createWindow() {
   // Storage and skin server are already initialized in app.whenReady
+
   const win = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -2929,38 +4435,35 @@ async function createWindow() {
   try { Menu.setApplicationMenu(null) } catch (e) {}
 
   // Keep reference to window for IPC handlers
-
-  console.log('createWindow: currentDevServerPort=', currentDevServerPort)
   mainWindow = win
-
-  // Diagnostic listeners: report renderer load status
-  try {
-    win.webContents.on('did-finish-load', () => {
-      console.log('Renderer finished load (did-finish-load)')
-    })
-    win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      console.error('Renderer did-fail-load:', { errorCode, errorDescription, validatedURL, isMainFrame })
-    })
-  } catch (e) {
-    console.warn('Failed to attach webContents listeners:', e && e.message)
+  let shown = false
+  const showWindow = () => {
+    if (shown || win.isDestroyed()) return
+    shown = true
+    mainWindowShownAt = Date.now()
+    win.show()
   }
 
-  await loadRendererUrl(win, 'main')
-
-  // Fallback: if 'ready-to-show' does not fire within a short timeout, show window anyway
-  const showTimeout = setTimeout(() => {
-    try {
-      if (!win.isDestroyed() && !win.isVisible()) {
-        console.warn('ready-to-show did not fire: showing window by fallback timeout')
-        win.show()
-      }
-    } catch {}
-  }, 4000)
-
-  win.once('ready-to-show', () => {
-    clearTimeout(showTimeout)
-    try { win.show() } catch {}
+  win.on('close', () => {
+    console.log('Main window close requested')
   })
+
+  win.on('closed', () => {
+    console.log('Main window closed')
+    if (mainWindow === win) mainWindow = null
+  })
+
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Renderer process gone:', details)
+  })
+
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    console.error('Renderer did-fail-load:', { errorCode, errorDescription, validatedURL, isMainFrame })
+  })
+
+  win.once('ready-to-show', showWindow)
+  await loadRendererUrl(win)
+  showWindow()
 
   // Forward maximize/unmaximize state to renderer for UI updates
   win.on('maximize', () => win.webContents.send('window:maximize-change', true))
@@ -2968,16 +4471,27 @@ async function createWindow() {
 }
 
 async function findDevServerPort() {
-  const ports = []
-  for (let p = 4173; p <= 4182; p++) ports.push(p)
-  for (const p of ports) {
+  const configuredPort = Number.parseInt(process.env.KURO_DEV_SERVER_PORT || '4173', 10)
+  const port = Number.isFinite(configuredPort) ? configuredPort : 4173
+
+  const start = Date.now()
+  const maxWaitMs = 5000 // wait up to 5s for dev server to appear
+  const perAttemptDelay = 300
+
+  while (Date.now() - start < maxWaitMs) {
     try {
-      const res = await axios.get(`http://localhost:${p}`, { timeout: 800 })
-      if (res.status && res.status >= 200) return p
+      const res = await axios.get(`http://localhost:${port}`, { timeout: 800 })
+      if (res.status && res.status >= 200) {
+        console.log('findDevServerPort: found responsive server at', port)
+        return port
+      }
     } catch {
-      // ignore and try next
+      // ignore and retry the configured dev port
     }
+    // small delay before retrying the port scan
+    await new Promise((resolve) => setTimeout(resolve, perAttemptDelay))
   }
+
   return null
 }
 
@@ -2996,12 +4510,34 @@ app.whenReady().then(async () => {
   modrinthCachePath = path.join(userData, 'modrinth_cache.json')
 
   // Initialize storage and skin server before creating window
-  ensureStorage()
+  await ensureStorage()
   await startSkinServer()
   if (!app.isPackaged) {
     currentDevServerPort = await findDevServerPort() || 4173
+    console.log('Dev server detected on port', currentDevServerPort)
   }
-  createWindow()
+  await createWindow()
+})
+
+app.on('before-quit', () => {
+  console.log('App before-quit')
+})
+
+app.on('will-quit', () => {
+  console.log('App will-quit')
+})
+
+app.on('window-all-closed', () => {
+  console.log('App window-all-closed')
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
+
+app.on('activate', async () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    await createWindow()
+  }
 })
 
 ipcMain.handle('launcher:fetchVersionManifest', async () => {
@@ -3011,10 +4547,6 @@ ipcMain.handle('launcher:fetchVersionManifest', async () => {
 
 ipcMain.handle('launcher:getInstalledVersions', async () => {
   return await getInstalledVersions()
-})
-
-ipcMain.handle('launcher:getLaunchConsoleState', async () => {
-  return launchConsoleState
 })
 
 ipcMain.handle('launcher:installVersion', async (event, versionId) => {
@@ -3093,6 +4625,10 @@ ipcMain.handle('launcher:saveProfile', async (event, profile) => {
   return true
 })
 
+ipcMain.handle('launcher:createCustomModpack', async (event, input) => {
+  return await createCustomModpack(input)
+})
+
 ipcMain.handle('launcher:deleteProfile', async (event, profileId) => {
   await deleteProfile(profileId)
   return true
@@ -3124,11 +4660,11 @@ ipcMain.handle('launcher:logoutUser', async () => {
   return true
 })
 
-ipcMain.handle('launcher:launchProfile', async (event, profileId) => {
+ipcMain.handle('launcher:launchProfile', async (event, profileId, launcherProfileName) => {
   const profiles = await getProfiles()
   const profile = profiles.find((item) => item.id === profileId)
   if (!profile) throw new Error('Профиль не найден')
-  await launchGame(profile, event)
+  await launchGame(profile, event, launcherProfileName)
   return true
 })
 
@@ -3199,7 +4735,27 @@ ipcMain.handle('window:isMaximized', async () => {
   return mainWindow ? mainWindow.isMaximized() : false
 })
 
-ipcMain.handle('window:close', async () => {
-  if (mainWindow) mainWindow.close()
+ipcMain.handle('window:close', async (_event, payload) => {
+  try {
+    const tsInfo = payload && payload.ts ? `ts=${payload.ts}` : 'no-ts'
+    console.log('IPC window:close invoked', tsInfo)
+    if (payload && payload.stack) {
+      const lines = String(payload.stack).split('\n').slice(0, 4)
+      console.log('IPC close stack (truncated):\n' + lines.join('\n'))
+    }
+  } catch (e) {
+    console.log('IPC window:close invoked (failed to print payload)')
+  }
+
+  if (mainWindow) {
+    if (minecraftProcessActive) {
+      console.log('Minecraft is active, hiding launcher window instead of closing it')
+      mainWindow.hide()
+    } else if (Date.now() - mainWindowShownAt < STARTUP_CLOSE_GUARD_MS) {
+      console.log('Ignoring window:close during startup guard')
+    } else {
+      mainWindow.close()
+    }
+  }
   return true
 })

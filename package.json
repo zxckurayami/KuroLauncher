@@ -1,12 +1,12 @@
 {
   "name": "kuro-launcher",
   "productName": "KuroLauncher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Modern Minecraft launcher with dark Japanese aesthetics.",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently \"vite --port 4173\" \"wait-on http://localhost:4173 && electron .\"",
-    "start": "electron .",
+    "dev": "concurrently -k \"vite --port 4173 --strictPort\" \"wait-on tcp:4173 && node scripts/launch-electron.js\"",
+    "start": "node scripts/launch-electron.js",
     "build": "tsc && vite build",
     "package": "electron-builder",
     "preview": "vite preview",

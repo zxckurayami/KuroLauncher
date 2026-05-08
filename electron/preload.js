@@ -3,7 +3,6 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('launcher', {
   fetchVersionManifest: () => ipcRenderer.invoke('launcher:fetchVersionManifest'),
   getInstalledVersions: () => ipcRenderer.invoke('launcher:getInstalledVersions'),
-  getLaunchConsoleState: () => ipcRenderer.invoke('launcher:getLaunchConsoleState'),
   installVersion: (versionId) => ipcRenderer.invoke('launcher:installVersion', versionId),
   deleteInstalledVersion: (versionId) => ipcRenderer.invoke('launcher:deleteInstalledVersion', versionId),
   onInstallProgress: (listener) => ipcRenderer.on('launcher:installProgress', listener),
@@ -12,6 +11,7 @@ contextBridge.exposeInMainWorld('launcher', {
   removeLaunchProgress: (listener) => ipcRenderer.removeListener('launcher:launchProgress', listener),
   getProfiles: () => ipcRenderer.invoke('launcher:getProfiles'),
   saveProfile: (profile) => ipcRenderer.invoke('launcher:saveProfile', profile),
+  createCustomModpack: (input) => ipcRenderer.invoke('launcher:createCustomModpack', input),
   deleteProfile: (profileId) => ipcRenderer.invoke('launcher:deleteProfile', profileId),
   getSettings: () => ipcRenderer.invoke('launcher:getSettings'),
   saveSettings: (settings) => ipcRenderer.invoke('launcher:saveSettings', settings),
@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('launcher', {
   loginUser: (email, password) => ipcRenderer.invoke('launcher:loginUser', email, password),
   registerUser: (email, password) => ipcRenderer.invoke('launcher:registerUser', email, password),
   logoutUser: () => ipcRenderer.invoke('launcher:logoutUser'),
-  launchProfile: (profileId) => ipcRenderer.invoke('launcher:launchProfile', profileId),
+  launchProfile: (profileId, launcherProfileName) => ipcRenderer.invoke('launcher:launchProfile', profileId, launcherProfileName),
   searchModrinth: (query, options) => ipcRenderer.invoke('launcher:searchModrinth', query, options),
   getModrinthProject: (projectId) => ipcRenderer.invoke('launcher:getModrinthProject', projectId),
   getModrinthVersions: (projectId) => ipcRenderer.invoke('launcher:getModrinthVersions', projectId),
@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('launcher', {
   toggleInstalledAddon: (type, name, enabled, addonPath) => ipcRenderer.invoke('launcher:toggleInstalledAddon', type, name, enabled, addonPath),
   deleteInstalledAddon: (type, name, addonPath) => ipcRenderer.invoke('launcher:deleteInstalledAddon', type, name, addonPath),
   deleteModpackDirectory: (modpackKey) => ipcRenderer.invoke('launcher:deleteModpackDirectory', modpackKey),
+  openExternal: (targetUrl) => ipcRenderer.invoke('launcher:openExternal', targetUrl),
   // Skin management
   saveSkin: (profileId, base64Data) => ipcRenderer.invoke('launcher:saveSkin', profileId, base64Data),
   getSkinUrl: (profileId) => ipcRenderer.invoke('launcher:getSkinUrl', profileId)
@@ -41,7 +42,10 @@ contextBridge.exposeInMainWorld('windowControls', {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
   isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
-  close: () => ipcRenderer.invoke('window:close'),
+  close: () => {
+    const stack = new Error('windowControls.close invoked').stack || 'no renderer stack'
+    return ipcRenderer.invoke('window:close', { stack, ts: Date.now() })
+  },
   onMaximizeChange: (listener) => ipcRenderer.on('window:maximize-change', listener),
   removeMaximizeChange: (listener) => ipcRenderer.removeListener('window:maximize-change', listener)
 })

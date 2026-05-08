@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
+import type { ChangeEvent, MouseEvent as ReactMouseEvent } from 'react'
 const logoIcon = new URL('../logo/KuroLauncher.png', import.meta.url).href
+const heroReleaseArtwork = new URL('./assets/hero-release.png', import.meta.url).href
+const heroWorkshopArtwork = new URL('./assets/hero-workshop.png', import.meta.url).href
+const heroProfilesArtwork = new URL('./assets/hero-profiles.png', import.meta.url).href
+const heroBoostArtwork = new URL('./assets/hero-boost.png', import.meta.url).href
+const newsUpdateArtwork = new URL('./assets/news-update.png', import.meta.url).href
+const newsReleaseArtwork = new URL('./assets/news-release.png', import.meta.url).href
+const newsBoostArtwork = new URL('./assets/news-boost.png', import.meta.url).href
+const APP_VERSION = '0.2.0'
 
 type VersionItem = {
   id: string
@@ -20,7 +29,7 @@ type Profile = {
   versionId: string
   ram: string
   javaPath: string
-  username: string
+  username?: string
   loader: 'vanilla' | 'forge' | 'fabric' | 'quilt' | 'neoforge'
   loaderVersion?: string
   fullscreenMode?: 'global' | 'on' | 'off'
@@ -37,39 +46,213 @@ type Settings = {
   ram: string
   accent?: 'red' | 'violet' | 'white'
   fullscreen: boolean
+  kuroBoost?: boolean
+  kuroBoostPreset?: 'ai'
+  profileName?: string
+  profileStatus?: string
+  avatarDataUrl?: string
 }
 
 type AuthState = {
   email: string
   loggedIn: boolean
+  name?: string
 }
 
-type LaunchConsoleEntry = {
-  id: number
-  message: string
-  tone: 'info' | 'success' | 'error'
-}
+type IconName =
+  | 'home'
+  | 'versions'
+  | 'profiles'
+  | 'settings'
+  | 'mods'
+  | 'skins'
+  | 'play'
+  | 'download'
+  | 'spark'
+  | 'folder'
+  | 'shirt'
+  | 'search'
+  | 'user'
+  | 'friends'
+  | 'shield'
+  | 'refresh'
+  | 'chevron'
+  | 'globe'
+  | 'discord'
+  | 'telegram'
 
 const tabs = [
-  { id: 'Dashboard', label: 'Главная' },
-  { id: 'Versions', label: 'Версии' },
-  { id: 'Profiles', label: 'Профили' },
-  { id: 'Settings', label: 'Настройки' },
-  { id: 'Mods', label: 'Моды' },
-  { id: 'Skins', label: 'Скины' }
+  { id: 'Dashboard', label: 'Главная', icon: 'home' },
+  { id: 'Versions', label: 'Версии', icon: 'versions' },
+  { id: 'Profiles', label: 'Профили', icon: 'profiles' },
+  { id: 'Mods', label: 'Моды', icon: 'mods' },
+  { id: 'Skins', label: 'Скины', icon: 'skins' },
+  { id: 'Settings', label: 'Настройки', icon: 'settings' }
 ] as const
 
 const defaultSteveSkinUrl = new URL('../skins/default-skin.png', import.meta.url).href
 
+const socialLinks: Array<{ id: string; title: string; url: string; icon: IconName }> = [
+  { id: 'discord', title: 'Discord', url: 'https://discord.gg/4WmemBZzut', icon: 'discord' },
+  { id: 'telegram', title: 'Telegram', url: 'https://t.me/+kYL4EsOD7c1jYjUy', icon: 'telegram' },
+  { id: 'telegram-updates', title: 'Telegram: обновления', url: 'https://t.me/+8zlPNjNz6QNjMTdi', icon: 'download' }
+]
+
 type Tab = typeof tabs[number]['id']
+
+function Icon({ name, className = '' }: { name: IconName; className?: string }) {
+  const common = {
+    width: 20,
+    height: 20,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    xmlns: 'http://www.w3.org/2000/svg',
+    'aria-hidden': true,
+    className
+  }
+
+  switch (name) {
+    case 'home':
+      return (
+        <svg {...common}>
+          <path d="M3 11.4 12 4l9 7.4V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-8.6Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'versions':
+      return (
+        <svg {...common}>
+          <path d="M12 3 4 7l8 4 8-4-8-4Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          <path d="M4 12l8 4 8-4M4 17l8 4 8-4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'profiles':
+      return (
+        <svg {...common}>
+          <path d="M16 20c0-2.2-1.8-4-4-4H8c-2.2 0-4 1.8-4 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <path d="M10 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM20 19c0-1.9-1.1-3.5-2.8-4.2M16.4 4.4a3.5 3.5 0 0 1 0 6.2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        </svg>
+      )
+    case 'settings':
+      return (
+        <svg {...common}>
+          <path d="M9.7 4.1a2.35 2.35 0 0 1 4.6 0 2.35 2.35 0 0 0 3.3 1.9 2.35 2.35 0 0 1 2.3 4 2.35 2.35 0 0 0 0 3.9 2.35 2.35 0 0 1-2.3 4 2.35 2.35 0 0 0-3.3 1.9 2.35 2.35 0 0 1-4.6 0 2.35 2.35 0 0 0-3.3-1.9 2.35 2.35 0 0 1-2.3-4 2.35 2.35 0 0 0 0-3.9 2.35 2.35 0 0 1 2.3-4 2.35 2.35 0 0 0 3.3-1.9Z" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.65" />
+        </svg>
+      )
+    case 'mods':
+      return (
+        <svg {...common}>
+          <path d="M8.5 3.5 6 6l2 2-2 2-2-2-2.5 2.5L5 14l-2 2 5 5 2-2 3.5 3.5L16 20l-2-2 2-2 2 2 2.5-2.5L17 12l2-2-5-5-2 2-3.5-3.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'skins':
+      return (
+        <svg {...common}>
+          <path d="M8 5 5 7l2 4 2-1v9h6v-9l2 1 2-4-3-2-2 2h-4L8 5Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'play':
+      return (
+        <svg {...common}>
+          <path d="M8 5.5v13l10-6.5-10-6.5Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'download':
+      return (
+        <svg {...common}>
+          <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'discord':
+      return (
+        <svg {...common}>
+          <path d="M7.4 7.7c3-1.3 6.2-1.3 9.2 0l.6.3 1.5 6.1c.1.5-.1 1-.5 1.3-1 .8-2.2 1.4-3.5 1.8l-.9-1.3c-1.2.2-2.4.2-3.6 0l-.9 1.3c-1.3-.4-2.5-1-3.5-1.8-.4-.3-.6-.8-.5-1.3L6.8 8l.6-.3Z" stroke="currentColor" strokeWidth="1.55" strokeLinejoin="round" />
+          <path d="M9.1 12.7c.55 0 1-.5 1-1.1s-.45-1.1-1-1.1-1 .5-1 1.1.45 1.1 1 1.1ZM14.9 12.7c.55 0 1-.5 1-1.1s-.45-1.1-1-1.1-1 .5-1 1.1.45 1.1 1 1.1Z" fill="currentColor" />
+          <path d="M9.4 8.2 8.8 6.7M14.6 8.2l.6-1.5" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" />
+        </svg>
+      )
+    case 'telegram':
+      return (
+        <svg {...common}>
+          <path d="M20.4 4.7 4 11.1c-.9.35-.85 1.65.08 1.92l4.22 1.22 1.6 4.78c.32.94 1.55 1.1 2.1.27l2.28-3.42 4.15 3.03c.75.55 1.83.14 2.01-.77l2.08-12.02c.17-.98-.92-1.75-1.84-1.4Z" stroke="currentColor" strokeWidth="1.55" strokeLinejoin="round" />
+          <path d="m8.4 14.2 11.5-8.5-8.9 11.2" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'spark':
+      return (
+        <svg {...common}>
+          <path d="M13 3 9.8 10.2 3 13l6.8 2.8L13 23l3.2-7.2L23 13l-6.8-2.8L13 3Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'folder':
+      return (
+        <svg {...common}>
+          <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h5l2 2h8A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-10Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'shirt':
+      return (
+        <svg {...common}>
+          <path d="M8 5 5 7l2 4 2-1v9h6v-9l2 1 2-4-3-2-2 2h-4L8 5Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'search':
+      return (
+        <svg {...common}>
+          <path d="M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14ZM16.5 16.5 21 21" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'user':
+      return (
+        <svg {...common}>
+          <path d="M20 20c0-3.3-2.7-6-6-6h-4c-3.3 0-6 2.7-6 6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <path d="M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" stroke="currentColor" strokeWidth="1.7" />
+        </svg>
+      )
+    case 'friends':
+      return (
+        <svg {...common}>
+          <path d="M8 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM2.5 20c.6-2.9 2.8-5 5.5-5 1.4 0 2.6.5 3.6 1.4M17 11a3 3 0 1 0 0-6M14.8 14.5c2.5.2 4.6 2.1 5.2 4.7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        </svg>
+      )
+    case 'shield':
+      return (
+        <svg {...common}>
+          <path d="M12 3 5 6v5.2c0 4.4 2.8 8.4 7 9.8 4.2-1.4 7-5.4 7-9.8V6l-7-3Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          <path d="m8.8 12 2.1 2.1 4.4-4.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'refresh':
+      return (
+        <svg {...common}>
+          <path d="M20 7v5h-5M4 17v-5h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M18.4 9A7 7 0 0 0 6 7.8M5.6 15A7 7 0 0 0 18 16.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'chevron':
+      return (
+        <svg {...common}>
+          <path d="m9 5 7 7-7 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'globe':
+      return (
+        <svg {...common}>
+          <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M3.6 9h16.8M3.6 15h16.8M12 3c2.1 2.5 3.1 5.5 3.1 9s-1 6.5-3.1 9c-2.1-2.5-3.1-5.5-3.1-9S9.9 5.5 12 3Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      )
+    default:
+      return null
+  }
+}
 
 function createProfileDraft(settings: Settings, initialProfile?: Partial<Profile>) {
   return {
     name: initialProfile?.name || '',
     versionId: initialProfile?.versionId || '',
-    ram: initialProfile?.ram || 'auto',
+    ram: initialProfile?.ram || 'global',
     javaPath: initialProfile?.javaPath || settings.javaPath,
-    username: initialProfile?.username || '',
     loader: (initialProfile?.loader || 'vanilla') as Profile['loader'],
     loaderVersion: initialProfile?.loaderVersion || '',
     fullscreenMode: (initialProfile?.fullscreenMode || 'global') as NonNullable<Profile['fullscreenMode']>
@@ -80,6 +263,112 @@ function formatProfileFullscreen(mode?: Profile['fullscreenMode']) {
   if (mode === 'on') return 'Фуллскрин'
   if (mode === 'off') return 'Окно'
   return 'Экран: по лаунчеру'
+}
+
+function formatRamLabel(value: string | undefined) {
+  if (!value || value === 'global') return 'по лаунчеру'
+  if (value === 'auto') return 'авто'
+  return value
+}
+
+function formatProfileRam(profile: Profile, settings: Settings) {
+  if (!profile.ram || profile.ram === 'global') {
+    return `RAM: по лаунчеру (${formatRamLabel(settings.ram)})`
+  }
+  return `RAM: ${formatRamLabel(profile.ram)}`
+}
+
+const addonCategoryLabels: Record<string, string> = {
+  mods: 'Моды',
+  resourcepacks: 'Ресурспаки',
+  shaderpacks: 'Шейдеры'
+}
+
+function createAddonBuckets() {
+  return {
+    mods: [] as any[],
+    resourcepacks: [] as any[],
+    shaderpacks: [] as any[]
+  }
+}
+
+function getDefaultAddonCategory(categories: ReturnType<typeof createAddonBuckets>) {
+  if (categories.mods.length > 0) return 'mods'
+  if (categories.resourcepacks.length > 0) return 'resourcepacks'
+  if (categories.shaderpacks.length > 0) return 'shaderpacks'
+  return 'mods'
+}
+
+function getProfileModpackKey(profile?: Profile | null) {
+  if (!profile?.modpackPath) return profile?.id || ''
+  const parts = profile.modpackPath.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || profile.id
+}
+
+function formatLoaderName(loader?: string, loaderVersion?: string) {
+  const labels: Record<string, string> = {
+    vanilla: 'Vanilla',
+    forge: 'Forge',
+    fabric: 'Fabric',
+    quilt: 'Quilt',
+    neoforge: 'NeoForge'
+  }
+  const label = labels[loader || 'vanilla'] || loader || 'Vanilla'
+  return loaderVersion ? `${label} ${loaderVersion}` : label
+}
+
+function formatAddonType(type?: string) {
+  return addonCategoryLabels[type || ''] || type || 'Дополнение'
+}
+
+function normalizeAccent(accent?: string): NonNullable<Settings['accent']> {
+  if (accent === 'violet' || accent === 'white') return accent
+  return 'red'
+}
+
+function normalizeProfileText(value: unknown, maxLength: number) {
+  return typeof value === 'string' ? value.slice(0, maxLength) : ''
+}
+
+function normalizeAvatarDataUrl(value: unknown) {
+  return typeof value === 'string' && value.startsWith('data:image/') ? value : ''
+}
+
+function formatRamStat(value?: string) {
+  if (!value || value === 'auto') return 'Авто'
+  const match = value.match(/^(\d+)G$/i)
+  return match ? `${match[1]} GB` : value
+}
+
+function getRamStatWidth(value?: string) {
+  if (!value || value === 'auto') return '42%'
+  const match = value.match(/^(\d+)G$/i)
+  if (!match) return '42%'
+  return `${Math.min(100, Math.max(18, Math.round(Number(match[1]) / 16 * 100)))}%`
+}
+
+function formatCompactDate(value?: string) {
+  if (!value) return 'Актуальный релиз'
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Актуальный релиз'
+
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'short'
+  }).format(date)
+}
+
+function openExternalLink(event: ReactMouseEvent<HTMLAnchorElement>, targetUrl: string) {
+  event.preventDefault()
+
+  const openExternal = (window as any).launcher?.openExternal
+  if (typeof openExternal === 'function') {
+    void openExternal(targetUrl)
+    return
+  }
+
+  window.open(targetUrl, '_blank', 'noopener,noreferrer')
 }
 
 // Custom select component to replace native <select> for better styling
@@ -319,15 +608,6 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
           placeholder="Выберите режим"
         />
       </div>
-      <div className="form-group">
-        <label className="form-label">Никнейм</label>
-        <input
-          className="form-input"
-          value={formData.username}
-          onChange={(e) => updateFormData({ username: e.target.value })}
-          placeholder="Ваш никнейм"
-        />
-      </div>
       <div className="profile-form-actions">
         <button className="btn btn-primary" onClick={handleSubmit}>{submitLabel || (isEditMode ? 'Сохранить изменения' : 'Сохранить профиль')}</button>
         {isEditMode && onCancel && (
@@ -349,6 +629,11 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
     { value: '16G', label: '16 GB' }
   ]
 
+  const profileRamOptions = [
+    { value: 'global', label: 'Как в настройках лаунчера' },
+    ...ramOptions
+  ]
+
   const getSystemTheme = (): 'dark' | 'light' => {
     if (typeof window !== 'undefined' && window.matchMedia) {
       return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -361,21 +646,55 @@ function ProfileForm({ onSave, settings, installed, availableLoaderVersions, loa
     javaPath: 'java',
     ram: 'auto',
     accent: 'red',
-    fullscreen: false
+    fullscreen: false,
+    kuroBoost: true,
+    kuroBoostPreset: 'ai',
+    profileName: '',
+    profileStatus: '',
+    avatarDataUrl: ''
   }
+
+function normalizeSettings(settings?: Partial<Settings> | null): Settings {
+  const next = { ...defaultSettings, ...(settings || {}) }
+  return {
+    ...next,
+    theme: next.theme === 'light' || next.theme === 'dark' ? next.theme : defaultSettings.theme,
+    javaPath: next.javaPath || defaultSettings.javaPath,
+    ram: next.ram || defaultSettings.ram,
+    accent: normalizeAccent(next.accent),
+    fullscreen: Boolean(next.fullscreen),
+    kuroBoost: next.kuroBoost !== false,
+    kuroBoostPreset: 'ai',
+    profileName: normalizeProfileText(next.profileName, 32),
+    profileStatus: normalizeProfileText(next.profileStatus, 80),
+    avatarDataUrl: normalizeAvatarDataUrl(next.avatarDataUrl)
+  }
+}
 
 const newsItems = [
   {
-    title: 'KuroLauncher 0.1.0',
-    body: 'Стартовая версия лаунчера с загрузкой версий, профилями и атмосферным интерфейсом.'
+    title: 'Настройки сохраняются сами',
+    tag: 'Настройки',
+    date: 'Сегодня',
+    icon: 'settings' as IconName,
+    image: newsUpdateArtwork,
+    body: 'Тема, акцент, RAM, Java и fullscreen теперь остаются после перезапуска лаунчера.'
   },
   {
-    title: 'Локальные профили и скины',
-    body: 'Быстрая загрузка профилей и локальных скинов без лишних задержек — играйте на своих условиях.'
+    title: 'Главный экран стал живым',
+    tag: 'Интерфейс',
+    date: 'Сегодня',
+    icon: 'spark' as IconName,
+    image: newsReleaseArtwork,
+    body: 'Верхний баннер теперь перелистывает новости, показывает прогресс и ведёт к нужным разделам.'
   },
   {
-    title: 'Современный UI',
-    body: 'Тёмная японская тема, glassmorphism и анимации для премиальному UX.'
+    title: 'Светлая тема отполирована',
+    tag: 'UI',
+    date: 'Обновлено',
+    icon: 'shield' as IconName,
+    image: newsBoostArtwork,
+    body: 'Белый акцент больше не уводит фон в синий, а красный стал глубже и спокойнее.'
   }
 ]
 
@@ -386,18 +705,18 @@ function App() {
   const [installed, setInstalled] = useState<InstalledVersion[]>([])
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [settings, setSettings] = useState<Settings>(defaultSettings)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [status, setStatus] = useState<string>('Готово')
   const [auth, setAuth] = useState<AuthState>({ email: '', loggedIn: false })
   const [loginState, setLoginState] = useState({ email: '', password: '' })
   const [registerMode, setRegisterMode] = useState(false)
+  const [activeHeroIndex, setActiveHeroIndex] = useState(0)
+  const [heroAutoplayResetKey, setHeroAutoplayResetKey] = useState(0)
   const [installingVersion, setInstallingVersion] = useState<string | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const [progressInfo, setProgressInfo] = useState<{ label: string; current?: number; total?: number } | null>(null)
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null)
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null)
-  const [launchConsoleOpen, setLaunchConsoleOpen] = useState(false)
-  const [launchConsolePhase, setLaunchConsolePhase] = useState<'idle' | 'preparing' | 'started' | 'error'>('idle')
-  const [launchConsoleEntries, setLaunchConsoleEntries] = useState<LaunchConsoleEntry[]>([])
 
   const [profileFormResetTrigger, setProfileFormResetTrigger] = useState(0) // Trigger for form reset
   const [availableLoaderVersions, setAvailableLoaderVersions] = useState<Array<{ value: string; label: string }>>([])
@@ -416,8 +735,19 @@ function App() {
   const [modrinthTotalHits, setModrinthTotalHits] = useState(0)
   const [modrinthLoading, setModrinthLoading] = useState(false)
   const [modrinthInstalledAddons, setModrinthInstalledAddons] = useState<any[]>([])
+  const [selectedModpackTarget, setSelectedModpackTarget] = useState<string>('')
+  const [modpackCreateForm, setModpackCreateForm] = useState({
+    name: '',
+    versionId: '',
+    loader: 'forge' as Profile['loader'],
+    loaderVersion: ''
+  })
+  const [modpackCreateLoaderVersions, setModpackCreateLoaderVersions] = useState<Array<{ value: string; label: string }>>([])
+  const [modpackCreateLoading, setModpackCreateLoading] = useState(false)
+  const [modpackCreateLoaderLoading, setModpackCreateLoaderLoading] = useState(false)
   const [expandedModpacks, setExpandedModpacks] = useState<Set<string>>(new Set())
   const [standaloneExpanded, setStandaloneExpanded] = useState(true)
+  const [openAddonCategories, setOpenAddonCategories] = useState<Record<string, string>>({})
   const [skinFile, setSkinFile] = useState<File | null>(null)
   const [skinDataUrl, setSkinDataUrl] = useState<string | null>(null)
   const [skinModel, setSkinModel] = useState<'classic' | 'slim'>('classic')
@@ -429,21 +759,6 @@ function App() {
   const skinViewerContainerRef = useRef<HTMLDivElement | null>(null)
   const viewerRef = useRef<any>(null)
   const viewerIdRef = useRef<number>(0)
-  const launchConsoleViewportRef = useRef<HTMLDivElement | null>(null)
-  const isLaunchConsoleView = useMemo(
-    () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'launch-console',
-    []
-  )
-
-  const pushLaunchConsoleEntry = (message: string, tone: LaunchConsoleEntry['tone'] = 'info') => {
-    const normalized = String(message || '').trim()
-    if (!normalized) return
-
-    setLaunchConsoleEntries((prev) => {
-      const next = [...prev, { id: Date.now() + Math.random(), message: normalized, tone }]
-      return next.slice(-220)
-    })
-  }
 
   // Custom confirm dialog - doesn't steal focus like window.confirm
   const showConfirm = (message: string): Promise<boolean> => {
@@ -472,13 +787,186 @@ function App() {
 
   const activeProfile = useMemo(() => profiles.find((profile) => profile.id === selectedProfile), [profiles, selectedProfile])
   const editingProfile = useMemo(() => profiles.find((profile) => profile.id === editingProfileId), [profiles, editingProfileId])
+  const modpackProfiles = useMemo(() => profiles.filter((profile) => Boolean(profile.modpackPath)), [profiles])
+  const selectedModpackProfile = useMemo(
+    () => modpackProfiles.find((profile) => profile.id === selectedModpackTarget) || null,
+    [modpackProfiles, selectedModpackTarget]
+  )
+  const versionSelectOptions = useMemo(
+    () => versions
+      .filter((version) => version.type === 'release')
+      .slice(0, 160)
+      .map((version) => ({ value: version.id, label: version.id })),
+    [versions]
+  )
+  const modpackTargetOptions = useMemo(
+    () => [
+      { value: '', label: 'Выберите модпак' },
+      ...modpackProfiles.map((profile) => ({
+        value: profile.id,
+        label: `${profile.name} • ${profile.versionId} • ${formatLoaderName(profile.loader, profile.loaderVersion)}`
+      }))
+    ],
+    [modpackProfiles]
+  )
+  const isTargetedModrinthType = modrinthSearchType !== 'modpack'
+  const effectiveModrinthVersion = isTargetedModrinthType && selectedModpackProfile
+    ? selectedModpackProfile.versionId
+    : modrinthSearchVersion
+  const effectiveModrinthLoader = isTargetedModrinthType && selectedModpackProfile
+    ? (modrinthSearchType === 'mod'
+      ? (selectedModpackProfile.loader === 'vanilla' ? '' : selectedModpackProfile.loader)
+      : '')
+    : modrinthSearchLoader
+  const latestRelease = useMemo(() => versions.find((version) => version.type === 'release') || null, [versions])
+  const dashboardNewsItems = newsItems
+  const launchCandidate = activeProfile || profiles[0] || null
+  const featuredVersionId = latestRelease?.id || installed[0]?.id || launchCandidate?.versionId || 'Загрузка релиза'
+  const featuredProfile = useMemo(
+    () => profiles.find((profile) => profile.versionId === featuredVersionId) || null,
+    [profiles, featuredVersionId]
+  )
+  const featuredInstalled = installed.some((item) => item.id === featuredVersionId)
+  const ramLabel = formatRamStat(settings.ram)
+  const ramBarWidth = getRamStatWidth(settings.ram)
+  const kuroBoostEnabled = settings.kuroBoost !== false
+  const setKuroBoost = (enabled: boolean) => {
+    setSettings((current) => ({
+      ...current,
+      kuroBoost: enabled,
+      kuroBoostPreset: 'ai'
+    }))
+    setStatus(enabled ? 'KuroBoost включён: профиль будет оптимизирован при запуске' : 'KuroBoost выключен')
+  }
+  const heroPrimaryDisabled = featuredVersionId === 'Загрузка релиза' || installingVersion === featuredVersionId || Boolean(featuredProfile && gameRunning)
+  const heroPrimaryLabel = featuredProfile
+    ? (gameRunning ? 'Игра запущена' : 'Играть')
+    : featuredInstalled
+      ? 'Создать профиль'
+      : installingVersion === featuredVersionId
+        ? 'Установка...'
+        : 'Установить релиз'
+  const profileSubtitle = featuredProfile
+    ? `${featuredProfile.name} • ${formatLoaderName(featuredProfile.loader, featuredProfile.loaderVersion)}`
+    : featuredInstalled
+      ? 'Версия установлена, профиль ещё не создан'
+      : 'Официальный актуальный релиз'
+  const releaseDateLabel = latestRelease?.releaseTime ? `Релиз ${formatCompactDate(latestRelease.releaseTime)}` : 'Релиз загружается'
+  const heroSlides = [
+    {
+      id: 'release',
+      kicker: 'Рекомендуемо',
+      title: featuredVersionId,
+      body: latestRelease
+        ? `Самый актуальный официальный релиз Minecraft: ${latestRelease.id}.`
+        : 'Загружаем актуальный релиз Minecraft из списка версий.',
+      image: heroReleaseArtwork,
+      meta: [featuredInstalled ? 'Установлено' : 'Можно установить', profileSubtitle, releaseDateLabel],
+      actions: [
+        {
+          id: 'release-primary',
+          label: heroPrimaryLabel,
+          icon: featuredProfile ? 'play' as IconName : featuredInstalled ? 'profiles' as IconName : 'download' as IconName,
+          variant: 'primary',
+          disabled: heroPrimaryDisabled,
+          onClick: () => {
+            if (featuredProfile) {
+              void launchProfile(featuredProfile)
+            } else if (featuredInstalled) {
+              setActiveTab('Profiles')
+            } else {
+              void installVersion(featuredVersionId)
+            }
+          }
+        },
+        {
+          id: 'release-versions',
+          label: 'Выбрать версию',
+          icon: 'versions' as IconName,
+          variant: 'secondary',
+          onClick: () => {
+            setVersionSearch(featuredVersionId === 'Загрузка релиза' ? '' : featuredVersionId)
+            setActiveTab('Versions')
+          }
+        },
+        {
+          id: 'release-workshop',
+          label: 'Мастерская',
+          icon: 'mods' as IconName,
+          variant: 'ghost',
+          onClick: () => setActiveTab('Mods')
+        }
+      ]
+    },
+    {
+      id: 'workshop',
+      kicker: 'Новости мастерской',
+      title: 'Моды, шейдеры, ресурспаки',
+      body: 'Собирайте модпаки, ставьте дополнения под выбранный профиль и держите контент разложенным по категориям.',
+      image: heroWorkshopArtwork,
+      meta: ['Модпаки', 'Шейдеры', 'Ресурспаки'],
+      actions: [
+        { id: 'workshop-open', label: 'Открыть мастерскую', icon: 'mods' as IconName, variant: 'primary', onClick: () => setActiveTab('Mods') },
+        { id: 'workshop-versions', label: 'Версии Minecraft', icon: 'versions' as IconName, variant: 'secondary', onClick: () => setActiveTab('Versions') }
+      ]
+    },
+    {
+      id: 'profiles',
+      kicker: 'Профили и скины',
+      title: 'Своя сборка под каждый запуск',
+      body: 'Отдельные настройки RAM, Java, загрузчика, fullscreen и скинов помогают быстро переключаться между сборками.',
+      image: heroProfilesArtwork,
+      meta: [`Профилей: ${profiles.length}`, 'Локальные скины', 'Настройки запуска'],
+      actions: [
+        { id: 'profiles-open', label: 'Мои профили', icon: 'profiles' as IconName, variant: 'primary', onClick: () => setActiveTab('Profiles') },
+        { id: 'profiles-skins', label: 'Скины', icon: 'skins' as IconName, variant: 'secondary', onClick: () => setActiveTab('Skins') },
+        { id: 'profiles-settings', label: 'Настройки', icon: 'settings' as IconName, variant: 'ghost', onClick: () => setActiveTab('Settings') }
+      ]
+    },
+    {
+      id: 'boost',
+      kicker: 'KuroBoost',
+      title: 'Умная оптимизация профилей',
+      body: 'KuroBoost подбирает RAM, JVM, игровые параметры и проверяет моды перед запуском под конкретный ПК.',
+      image: heroBoostArtwork,
+      meta: [kuroBoostEnabled ? 'Сейчас включён' : 'Можно включить', 'AI Optimized', 'Mod Check'],
+      actions: [
+        {
+          id: 'boost-toggle',
+          label: kuroBoostEnabled ? 'KuroBoost включён' : 'Включить KuroBoost',
+          icon: 'shield' as IconName,
+          variant: 'primary',
+          onClick: () => {
+            setKuroBoost(true)
+          }
+        },
+        { id: 'boost-settings', label: 'Профили', icon: 'profiles' as IconName, variant: 'secondary', onClick: () => setActiveTab('Profiles') }
+      ]
+    }
+  ]
+  const activeHeroSlide = heroSlides[activeHeroIndex] || heroSlides[0]
+  const changeHeroSlide = (nextIndex: number | ((index: number) => number)) => {
+    if (heroSlides.length < 1) return
+    setHeroAutoplayResetKey((key) => key + 1)
+    setActiveHeroIndex((currentIndex) => {
+      const resolvedIndex = typeof nextIndex === 'function' ? nextIndex(currentIndex) : nextIndex
+      return (resolvedIndex + heroSlides.length) % heroSlides.length
+    })
+  }
+
+  const launcherAvatar = normalizeAvatarDataUrl(settings.avatarDataUrl)
+  const launcherProfileName = (settings.profileName || '').trim()
+    || auth.name
+    || (auth.loggedIn ? 'Пользователь' : 'Гость')
+  const launcherProfileSubtitle = (settings.profileStatus || '').trim()
+    || (auth.loggedIn ? auth.email : 'Не вошёл в систему')
 
   const userInitials = useMemo(() => {
-    const source = auth.loggedIn ? auth.email : 'Гость'
+    const source = launcherProfileName || auth.email || 'Гость'
     const normalized = source.replace(/@.*$/, '').split(/[^a-zA-Z0-9а-яА-Я]+/).filter(Boolean)
     const initials = normalized.slice(0, 2).map((part) => part[0].toUpperCase()).join('')
     return initials ? initials.slice(0, 2) : 'GU'
-  }, [auth])
+  }, [auth.email, launcherProfileName])
 
   useEffect(() => {
     async function syncProfileSkin() {
@@ -618,12 +1106,6 @@ function App() {
     }
   }, [activeTab, skinModel, skinDataUrl, profileSkinUrl, defaultSteveSkinUrl])
 
-  useEffect(() => {
-    if ((!launchConsoleOpen && !isLaunchConsoleView) || !launchConsoleViewportRef.current) return
-    const element = launchConsoleViewportRef.current
-    element.scrollTop = element.scrollHeight
-  }, [launchConsoleEntries, launchConsoleOpen, isLaunchConsoleView])
-
   // Pagination logic with filtering and search
   const filteredVersions = versions.filter(v => {
     const matchesFilter = versionFilter === 'all' || v.type === versionFilter
@@ -647,14 +1129,13 @@ function App() {
   }
 
   useEffect(() => {
-    if (isLaunchConsoleView) return
     const wc = (window as any).windowControls
     if (!wc) return
     wc.isMaximized().then((v: boolean) => setIsMaximized(Boolean(v))).catch(() => {})
     const listener = (_event: any, value: boolean) => setIsMaximized(Boolean(value))
     wc.onMaximizeChange(listener)
     return () => wc.removeMaximizeChange(listener)
-  }, [isLaunchConsoleView])
+  }, [])
 
   const handleMinimize = () => {
     ;(window as any).windowControls?.minimize()
@@ -671,6 +1152,11 @@ function App() {
     ;(window as any).windowControls?.close()
   }
 
+  const createTitlebarMouseHandler = (action: () => void) => (event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return
+    action()
+  }
+
   async function loadState() {
     const installedVersions = await window.launcher.getInstalledVersions()
     setInstalled(installedVersions)
@@ -679,14 +1165,15 @@ function App() {
       ...p,
       loader: p.loader || 'vanilla',
       loaderVersion: p.loaderVersion || '',
-      ram: p.ram || 'auto',
+      ram: p.ram || 'global',
       javaPath: p.javaPath || defaultSettings.javaPath,
       username: p.username || '',
       fullscreenMode: p.fullscreenMode || 'global'
     }))
     setProfiles(updatedProfiles)
     const storedSettings = await window.launcher.getSettings()
-    setSettings({ ...defaultSettings, ...storedSettings })
+    setSettings(normalizeSettings(storedSettings))
+    setSettingsLoaded(true)
     const authState = await window.launcher.getAuthState()
     setAuth(authState)
   }
@@ -698,7 +1185,58 @@ function App() {
     if (editingProfileId && !profiles.some((profile) => profile.id === editingProfileId)) {
       setEditingProfileId(null)
     }
-  }, [profiles, selectedProfile, editingProfileId])
+    if (selectedModpackTarget && !profiles.some((profile) => profile.id === selectedModpackTarget && profile.modpackPath)) {
+      setSelectedModpackTarget('')
+    }
+  }, [profiles, selectedProfile, editingProfileId, selectedModpackTarget])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadCreateLoaderVersions() {
+      setModpackCreateLoaderVersions([])
+      if (!modpackCreateForm.versionId || modpackCreateForm.loader === 'vanilla') {
+        if (modpackCreateForm.loaderVersion) {
+          setModpackCreateForm((prev) => ({ ...prev, loaderVersion: '' }))
+        }
+        return
+      }
+
+      setModpackCreateLoaderLoading(true)
+      try {
+        const versions = await window.launcher.getLoaderVersions(modpackCreateForm.versionId, modpackCreateForm.loader)
+        if (cancelled) return
+        const items = Array.isArray(versions)
+          ? versions
+              .map((item: any) => {
+                if (typeof item === 'string') return { value: item, label: item }
+                if (item && typeof item === 'object') {
+                  return { value: item.version || item.id || String(item), label: item.label || item.version || item.id || String(item) }
+                }
+                return null
+              })
+              .filter((item): item is { value: string; label: string } => Boolean(item))
+          : []
+        setModpackCreateLoaderVersions(items)
+        setModpackCreateForm((prev) => {
+          if (prev.loaderVersion && items.some((item) => item.value === prev.loaderVersion)) return prev
+          return { ...prev, loaderVersion: items[0]?.value || '' }
+        })
+      } catch (error: any) {
+        if (!cancelled) {
+          setModpackCreateLoaderVersions([])
+          setStatus(`Не удалось загрузить версии модлоадера: ${error?.message || 'проверьте соединение'}`)
+        }
+      } finally {
+        if (!cancelled) setModpackCreateLoaderLoading(false)
+      }
+    }
+
+    loadCreateLoaderVersions()
+    return () => {
+      cancelled = true
+    }
+  }, [modpackCreateForm.versionId, modpackCreateForm.loader])
 
   async function fetchLoaderVersions(versionId: string, loader: Profile['loader']) {
     setAvailableLoaderVersions([])
@@ -732,22 +1270,10 @@ function App() {
   }
 
   useEffect(() => {
-    if (isLaunchConsoleView) {
-      window.launcher.getLaunchConsoleState().then((state) => {
-        if (!state) return
-        setLaunchConsolePhase((state.phase as any) || 'idle')
-        setLaunchConsoleEntries(Array.isArray(state.entries) ? state.entries : [])
-        if (state.progress) {
-          setProgressInfo({ label: 'Запуск Minecraft...', current: state.progress.current, total: state.progress.total })
-        }
-      }).catch(() => {})
-      return
-    }
-
     loadMeta()
     loadState()
     loadInstalledAddons()
-  }, [isLaunchConsoleView])
+  }, [])
 
 
 
@@ -768,15 +1294,16 @@ function App() {
     setModrinthPage(page)
     try {
       const data = await window.launcher.searchModrinth(modrinthQuery, {
-        version: modrinthSearchVersion,
-        loader: modrinthSearchLoader,
+        version: effectiveModrinthVersion,
+        loader: effectiveModrinthLoader,
         projectType: modrinthSearchType,
         page,
         pageSize: 20
       })
       setModrinthSearchResults(data.hits || [])
       setModrinthTotalHits(data.total_hits || 0)
-      setStatus(`Найдено ${data.hits?.length ?? 0} результатов (${data.total_hits ?? 0} всего)`)
+      const targetText = selectedModpackProfile && isTargetedModrinthType ? ` для "${selectedModpackProfile.name}"` : ''
+      setStatus(`Найдено ${data.hits?.length ?? 0} результатов${targetText} (${data.total_hits ?? 0} всего)`)
     } catch (error: any) {
       console.error('Modrinth search error', error)
       setStatus(`Ошибка поиска Modrinth: ${error?.message || 'проверьте соединение'}`)
@@ -787,19 +1314,75 @@ function App() {
     }
   }
 
-  async function installModrinthProject(projectId: string) {
+  async function createCustomModpack() {
+    if (!modpackCreateForm.name.trim()) {
+      showAlert('Введите название модпака')
+      return
+    }
+    if (!modpackCreateForm.versionId) {
+      showAlert('Выберите версию Minecraft для модпака')
+      return
+    }
+    if (modpackCreateForm.loader !== 'vanilla' && !modpackCreateForm.loaderVersion) {
+      showAlert('Выберите версию модлоадера')
+      return
+    }
+
+    setModpackCreateLoading(true)
+    setIsBusy(true)
+    setStatus('Создание модпака...')
+    try {
+      const result = await window.launcher.createCustomModpack(modpackCreateForm)
+      if (result?.profile) {
+        setSelectedModpackTarget(result.profile.id)
+        setSelectedProfile(result.profile.id)
+        setStandaloneExpanded(false)
+        setExpandedModpacks(new Set([getProfileModpackKey(result.profile)]))
+        setModpackCreateForm({ name: '', versionId: '', loader: 'forge', loaderVersion: '' })
+        await loadState()
+        await loadInstalledAddons()
+        setStatus(`Модпак "${result.profile.name}" создан`)
+      }
+    } catch (error: any) {
+      console.error('Create modpack error', error)
+      setStatus(`Ошибка создания модпака: ${error?.message || 'проверьте параметры'}`)
+    } finally {
+      setModpackCreateLoading(false)
+      setIsBusy(false)
+    }
+  }
+
+  async function installModrinthProject(item: any) {
+    const projectId = item?.slug || item?.project_id || item?.id
+    const projectType = item?.project_type || modrinthSearchType
+    if (!projectId) return
+    if (projectType !== 'modpack' && !selectedModpackProfile) {
+      showAlert('Выберите модпак, куда установить моды, ресурспаки или шейдеры')
+      return
+    }
+
     setIsBusy(true)
     setStatus('Установка Modrinth проекта...')
     try {
-      const result = await window.launcher.installModrinthProject(projectId, {
-        gameVersion: modrinthSearchVersion || undefined,
-        loader: modrinthSearchLoader || undefined
-      })
+      const installOptions = projectType === 'modpack'
+        ? {
+            gameVersion: modrinthSearchVersion || undefined,
+            loader: modrinthSearchLoader || undefined
+          }
+        : {
+            targetProfileId: selectedModpackProfile?.id,
+            gameVersion: selectedModpackProfile?.versionId,
+            loader: selectedModpackProfile?.loader === 'vanilla' ? undefined : selectedModpackProfile?.loader
+          }
+      const result = await window.launcher.installModrinthProject(projectId, installOptions)
       if (result?.profile) {
         setStatus(`Модпак установлен. Профиль "${result.profile.name}" создан.`)
         await loadState()
+        setSelectedModpackTarget(result.profile.id)
+        setStandaloneExpanded(false)
+        setExpandedModpacks(new Set([getProfileModpackKey(result.profile)]))
       } else {
-        setStatus('Проект установлен. Проверьте папку mods.')
+        setStatus(`Установлено в "${selectedModpackProfile?.name || result?.targetProfile?.name || 'модпак'}"`)
       }
       await loadInstalledAddons()
     } catch (error: any) {
@@ -815,7 +1398,7 @@ function App() {
       searchModrinth(1)
       loadInstalledAddons()
     }
-  }, [activeTab, modrinthSearchType, modrinthSearchLoader, modrinthSearchVersion])
+  }, [activeTab, modrinthSearchType, effectiveModrinthLoader, effectiveModrinthVersion])
 
   async function loadInstalledAddons() {
     try {
@@ -827,33 +1410,62 @@ function App() {
   }
 
   function toggleModpackExpansion(modpackId: string) {
-    const newExpanded = new Set(expandedModpacks)
-    if (newExpanded.has(modpackId)) {
-      newExpanded.delete(modpackId)
+    if (expandedModpacks.has(modpackId)) {
+      setExpandedModpacks(new Set())
     } else {
-      newExpanded.add(modpackId)
+      setStandaloneExpanded(false)
+      setExpandedModpacks(new Set([modpackId]))
     }
-    setExpandedModpacks(newExpanded)
   }
 
   const organizedAddons = useMemo(() => {
-    const modpacks: { [key: string]: any[] } = {}
-    const standalone: any[] = []
+    const modpacks: { [key: string]: any } = {}
+    const standalone = createAddonBuckets()
 
-    modrinthInstalledAddons.forEach(addon => {
-      if (addon.origin?.modpackId) {
-        const key = `${addon.origin.modpackId}-${addon.origin.modpackVersion || 'latest'}`
-        if (!modpacks[key]) {
-          modpacks[key] = []
-        }
-        modpacks[key].push(addon)
-      } else {
-        standalone.push(addon)
+    modpackProfiles.forEach((profile) => {
+      const key = getProfileModpackKey(profile)
+      if (!key) return
+      modpacks[key] = {
+        key,
+        title: profile.name,
+        gameVersion: profile.versionId,
+        loader: profile.loader,
+        loaderVersion: profile.loaderVersion || '',
+        categories: createAddonBuckets(),
+        total: 0,
+        profile
       }
     })
 
-    return { modpacks, standalone }
-  }, [modrinthInstalledAddons])
+    modrinthInstalledAddons.forEach(addon => {
+      const type = addon.type as 'mods' | 'resourcepacks' | 'shaderpacks'
+      if (!['mods', 'resourcepacks', 'shaderpacks'].includes(type)) return
+
+      if (addon.origin?.modpackKey || addon.origin?.modpackId) {
+        const key = addon.origin.modpackKey || `${addon.origin.modpackId}-${addon.origin.modpackVersion || 'latest'}`
+        if (!modpacks[key]) {
+          modpacks[key] = {
+            key,
+            title: addon.origin.projectTitle || addon.origin.modpackId || 'Modpack',
+            gameVersion: addon.origin.gameVersion || '',
+            loader: addon.origin.detectedLoader || 'vanilla',
+            loaderVersion: addon.origin.loaderVersion || '',
+            categories: createAddonBuckets(),
+            total: 0,
+            profile: null
+          }
+        }
+        modpacks[key].categories[type].push(addon)
+        modpacks[key].total += 1
+      } else {
+        standalone[type].push(addon)
+      }
+    })
+
+    const standaloneTotal = Object.values(standalone).reduce((sum, items) => sum + items.length, 0)
+
+    return { modpacks, standalone, standaloneTotal }
+  }, [modrinthInstalledAddons, modpackProfiles])
 
   async function deleteModpack(modpackKey: string, modpackTitle: string) {
     if (await showConfirm(`Удалить модпак "${modpackTitle}" и все его дополнения?`)) {
@@ -871,7 +1483,7 @@ function App() {
     if (await showConfirm('Удалить все отдельные дополнения?')) {
       try {
         // Delete all standalone addons
-        for (const addon of organizedAddons.standalone) {
+        for (const addon of Object.values(organizedAddons.standalone).flat()) {
           await window.launcher.deleteInstalledAddon(addon.type, addon.name, addon.path)
         }
         await loadInstalledAddons() // Reload to get updated state
@@ -901,6 +1513,59 @@ function App() {
     }
   }
 
+  function renderAddonCategory(
+    scopeKey: string,
+    categoryKey: 'mods' | 'resourcepacks' | 'shaderpacks',
+    addons: any[],
+    defaultCategory: 'mods' | 'resourcepacks' | 'shaderpacks'
+  ) {
+    const hasStoredCategory = Object.prototype.hasOwnProperty.call(openAddonCategories, scopeKey)
+    const openCategory = hasStoredCategory ? openAddonCategories[scopeKey] : defaultCategory
+    const isOpen = openCategory === categoryKey
+
+    return (
+      <div key={categoryKey} className={`addon-category ${isOpen ? 'open' : ''}`}>
+        <button
+          type="button"
+          className="addon-category-header"
+          onClick={() => {
+            setOpenAddonCategories((prev) => ({
+              ...prev,
+              [scopeKey]: isOpen ? '' : categoryKey
+            }))
+          }}
+        >
+          <span className="addon-category-title">
+            <span className="addon-category-chevron">{isOpen ? '▾' : '▸'}</span>
+            {addonCategoryLabels[categoryKey]}
+          </span>
+          <span className="addon-category-count">{addons.length}</span>
+        </button>
+        {isOpen && (
+          <div className="addon-category-list">
+            {addons.length === 0 && <div className="addon-empty">Пусто</div>}
+            {addons.map((addon) => (
+              <div key={addon.id} className="installed-item addon-row">
+                <div className="addon-row-main">
+                  <span>{addon.name}</span>
+                  <span>{formatAddonType(addon.type)} • {addon.enabled ? 'Включен' : 'Отключен'}</span>
+                </div>
+                <div className="addon-row-actions">
+                  <button className="outline-button" onClick={() => toggleAddon(addon)}>
+                    {addon.enabled ? 'Отключить' : 'Включить'}
+                  </button>
+                  <button className="outline-button delete-button" onClick={() => deleteAddon(addon)}>
+                    Удалить
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   useEffect(() => {
     if (activeTab === 'Versions') {
       setCurrentPage(1)
@@ -918,33 +1583,14 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const launchProgressListener = (_event: any, data: { message: string; progress?: { current: number; total: number }; gameExited?: boolean; gameStarted?: boolean; stream?: string; phase?: string }) => {
+    const launchProgressListener = (_event: any, data: { message: string; progress?: { current: number; total: number }; gameExited?: boolean }) => {
       setStatus(data.message)
       setIsBusy(true)
-
-      if (data.phase) {
-        setLaunchConsolePhase(data.phase as any)
-      }
-
-      const tone: LaunchConsoleEntry['tone'] =
-        data.gameStarted
-          ? 'success'
-          : data.message?.includes('Ошибка') || data.message?.includes('Exception') || data.message?.includes('Error')
-            ? 'error'
-            : 'info'
-
-      pushLaunchConsoleEntry(data.message, tone)
 
       if (data.gameExited) {
         setGameRunning(false)
         setIsBusy(false)
         setProgressInfo(null)
-        setLaunchConsolePhase('idle')
-      } else if (data.gameStarted) {
-        setLaunchConsolePhase('started')
-        window.setTimeout(() => {
-          setLaunchConsoleOpen(false)
-        }, 260)
       } else if (data.progress?.total) {
         setProgressInfo({ label: data.message, current: data.progress.current, total: data.progress.total })
       } else {
@@ -1001,7 +1647,7 @@ function App() {
       setStatus('Введите имя и выберите версию профиля')
       return
     }
-    await window.launcher.saveProfile({ ...profileData, id: `${Date.now()}` })
+    await window.launcher.saveProfile({ ...profileData, username: '', id: `${Date.now()}` })
     setStatus('Профиль сохранён')
     setProfileFormResetTrigger((k) => k + 1)
     await loadState()
@@ -1014,6 +1660,7 @@ function App() {
       ...editingProfile,
       ...profileData,
       id: editingProfile.id,
+      username: '',
       modpackPath: editingProfile.modpackPath,
       skin: editingProfile.skin
     }
@@ -1027,13 +1674,9 @@ function App() {
     setIsBusy(true)
     setProgressInfo({ label: `Запуск ${profile.name}...` })
     setStatus(`Запуск ${profile.name}...`)
-    setLaunchConsolePhase('preparing')
-    setLaunchConsoleEntries([
-      { id: Date.now(), message: `Подготавливаю запуск профиля "${profile.name}"...`, tone: 'info' }
-    ])
 
     try {
-      await window.launcher.launchProfile(profile.id)
+      await window.launcher.launchProfile(profile.id, launcherProfileName)
       setGameRunning(true)
       setStatus(`Игра запущена: ${profile.name}`)
       setProgressInfo(null)
@@ -1042,8 +1685,6 @@ function App() {
       setStatus(`Ошибка запуска: ${error?.message || 'проверьте Java и установку версии'}`)
       setProgressInfo(null)
       setIsBusy(false)
-      setLaunchConsolePhase('error')
-      pushLaunchConsoleEntry(`Ошибка запуска: ${error?.message || 'проверьте Java и установку версии'}`, 'error')
     }
   }
 
@@ -1088,13 +1729,52 @@ function App() {
     setStatus('Вы вышли из аккаунта')
   }
 
+  function handleAvatarUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      showAlert('Выберите изображение для аватарки.')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      showAlert('Аватарка должна быть меньше 2 МБ.')
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      if (!result.startsWith('data:image/')) {
+        showAlert('Не удалось прочитать изображение.')
+        return
+      }
+      setSettings((current) => ({ ...current, avatarDataUrl: result }))
+      setStatus('Аватар профиля обновлён')
+    }
+    reader.onerror = () => {
+      showAlert('Не удалось загрузить аватарку.')
+    }
+    reader.readAsDataURL(file)
+  }
+
   async function handleSaveSettings() {
-    await window.launcher.saveSettings(settings)
+    const normalizedSettings = normalizeSettings(settings)
+    setSettings(normalizedSettings)
+    await window.launcher.saveSettings(normalizedSettings)
     setStatus('Настройки сохранены')
   }
 
+  useEffect(() => {
+    if (!settingsLoaded) return
+    void window.launcher.saveSettings(normalizeSettings(settings)).catch((error: any) => {
+      console.error('Ошибка автосохранения настроек', error)
+    })
+  }, [settings, settingsLoaded])
+
   const themeClass = settings.theme === 'light' ? 'theme-light' : 'theme-dark'
-  const accentColor = settings.accent || 'red'
+  const accentColor = normalizeAccent(settings.accent)
   
   useEffect(() => {
     try {
@@ -1108,86 +1788,24 @@ function App() {
   }, [themeClass, accentColor])
 
   useEffect(() => {
-    if (isLaunchConsoleView) return
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = (e: MediaQueryListEvent) => {
-      setSettings(s => ({ ...s, theme: e.matches ? 'dark' : 'light' }))
+    try {
+      window.localStorage.setItem('kuroBoost', kuroBoostEnabled ? 'on' : 'off')
+    } catch (e) {}
+  }, [kuroBoostEnabled])
+
+  useEffect(() => {
+    if (activeHeroIndex >= heroSlides.length) {
+      setActiveHeroIndex(0)
     }
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
-  }, [isLaunchConsoleView])
+  }, [activeHeroIndex, heroSlides.length])
 
-  const launchConsolePanel = (
-    <div className="launch-console-panel">
-      <div className="launch-console-header">
-        <div className="launch-console-copy">
-          <span className="launch-console-eyebrow">Launch Console</span>
-          <h3 className="launch-console-title">Запуск Minecraft</h3>
-          <p className="launch-console-subtitle">
-            Окно показывает шаги подготовки, загрузку библиотек и сообщения JVM до появления самого Minecraft.
-          </p>
-        </div>
-        <div className="launch-console-header-actions">
-          <div className={`launch-console-badge ${launchConsolePhase}`}>
-            {launchConsolePhase === 'started'
-              ? 'Игра открыта'
-              : launchConsolePhase === 'error'
-                ? 'Ошибка запуска'
-                : 'Подготовка'}
-          </div>
-          <button
-            type="button"
-            className="launch-console-close"
-            onClick={() => (window as any).windowControls?.close?.()}
-            aria-label="Закрыть окно консоли"
-          >
-            ×
-          </button>
-        </div>
-      </div>
-
-      {progressInfo && (
-        <div className="launch-console-progress">
-          <div className="launch-console-progress-top">
-            <span>{progressInfo.label}</span>
-            <span>
-              {progressInfo.total
-                ? `${Math.min(100, Math.round(((progressInfo.current ?? 0) / progressInfo.total) * 100))}%`
-                : 'LIVE'}
-            </span>
-          </div>
-          <div className="progress-bar">
-            <div
-              className="progress-bar-fill"
-              style={{ width: progressInfo.total ? `${Math.min(100, Math.round(((progressInfo.current ?? 0) / progressInfo.total) * 100))}%` : '100%' }}
-            />
-          </div>
-        </div>
-      )}
-
-      <div className="launch-console-log" ref={launchConsoleViewportRef}>
-        {launchConsoleEntries.length === 0 && (
-          <div className="launch-console-empty">Ожидание событий запуска...</div>
-        )}
-        {launchConsoleEntries.map((entry) => (
-          <div key={entry.id} className={`launch-console-line ${entry.tone}`}>
-            <span className="launch-console-line-mark" />
-            <span className="launch-console-line-text">{entry.message}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-
-  if (isLaunchConsoleView) {
-    return (
-      <div className={`launch-console-shell ${themeClass}`} data-accent={accentColor}>
-        <div className="live-bg"></div>
-        <div className="noise-overlay"></div>
-        {launchConsolePanel}
-      </div>
-    )
-  }
+  useEffect(() => {
+    if (activeTab !== 'Dashboard' || heroSlides.length < 2) return
+    const timer = window.setTimeout(() => {
+      setActiveHeroIndex((index) => (index + 1) % heroSlides.length)
+    }, 6500)
+    return () => window.clearTimeout(timer)
+  }, [activeTab, activeHeroIndex, heroAutoplayResetKey, heroSlides.length])
 
   return (
     <div className="app-shell">
@@ -1196,13 +1814,25 @@ function App() {
       <div className="titlebar">
         <div className="titlebar-title">KuroLauncher</div>
         <div className="titlebar-controls">
-          <button className="titlebar-btn" onClick={handleMinimize} aria-label="Minimize">
+          <button
+            type="button"
+            className="titlebar-btn"
+            onMouseUp={createTitlebarMouseHandler(handleMinimize)}
+            aria-label="Minimize"
+          >
             <svg viewBox="0 0 12 2" xmlns="http://www.w3.org/2000/svg" fill="none">
               <rect x="0" y="0" width="12" height="2" rx="1" fill="currentColor" />
             </svg>
           </button>
 
-          <button className="titlebar-btn" onClick={handleToggleMax} aria-label="Maximize">
+          <button
+            type="button"
+            className="titlebar-btn"
+            onMouseUp={createTitlebarMouseHandler(() => {
+              void handleToggleMax()
+            })}
+            aria-label="Maximize"
+          >
             {isMaximized ? (
               <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none">
                 <rect x="3" y="6" width="14" height="12" stroke="currentColor" strokeWidth="1.6" rx="1" />
@@ -1215,7 +1845,12 @@ function App() {
             )}
           </button>
 
-          <button className="titlebar-btn" onClick={handleClose} aria-label="Close">
+          <button
+            type="button"
+            className="titlebar-btn"
+            onMouseUp={createTitlebarMouseHandler(handleClose)}
+            aria-label="Close"
+          >
             <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none">
               <path d="M4 4l16 16M20 4L4 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -1223,57 +1858,95 @@ function App() {
         </div>
       </div>
 
-      <div className="header glass-panel">
-        <div className="header-left">
-          <div className="header-logo">
-            <img src={logoIcon} alt="KuroLauncher" className="header-logo-icon" />
-            <div className="header-logo-text">KuroLauncher</div>
-          </div>
-          <div className={`header-status ${isBusy ? 'loading' : ''}`}>
-            <span className="status-dot"></span>
-            {status}
+      <aside className="launcher-sidebar glass-panel">
+        <div className="sidebar-brand">
+          <img src={logoIcon} alt="KuroLauncher" className="sidebar-logo" />
+          <div className="sidebar-brand-copy">
+            <div className="sidebar-title">KuroLauncher</div>
+            <div className="sidebar-version">v{APP_VERSION}</div>
           </div>
         </div>
-        <div className="header-right">
-          <div className="user-section">
-            <button className="user-avatar" onClick={() => setUserMenuOpen((prev) => !prev)}>{userInitials}</button>
-            <div className="user-info">
-              <div className="user-name">{auth.loggedIn ? 'Пользователь' : 'Гость'}</div>
-              <div className="user-email">{auth.loggedIn ? auth.email : 'Не вошёл в систему'}</div>
-            </div>
-            <div className={`user-dropdown ${userMenuOpen ? 'open' : ''}`}>
-              {auth.loggedIn ? (
-                <>
-                  <button className="outline-button" onClick={() => { setUserMenuOpen(false); setActiveTab('Settings') }}>Профиль</button>
-                  <button className="outline-button" onClick={() => { handleLogout(); setUserMenuOpen(false) }}>Выйти</button>
-                </>
-              ) : (
-                <button
-                  className="outline-button"
-                  onClick={() => {
-                    setUserMenuOpen(false)
-                    setActiveTab('Settings')
-                  }}
-                >
-                  Войти
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
 
-      <div className="nav-bar">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`nav-button ${activeTab === tab.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+        <nav className="nav-bar" aria-label="Главная навигация">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`nav-button ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+              aria-label={tab.label}
+            >
+              <Icon name={tab.icon} />
+              <span>{tab.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-spacer" />
+
+        <div className="sidebar-profile-card">
+          <div className="sidebar-profile-main">
+            <button className={`user-avatar ${launcherAvatar ? 'has-image' : ''}`} onClick={() => setActiveTab('Settings')} aria-label="Открыть настройки профиля">
+              {launcherAvatar ? <img src={launcherAvatar} alt="" /> : userInitials}
+            </button>
+            <div className="user-info">
+              <div className="user-name">{launcherProfileName}</div>
+              <div className="user-email">{launcherProfileSubtitle}</div>
+            </div>
+          </div>
+          {auth.loggedIn ? (
+            <button className="outline-button sidebar-wide-button" onClick={handleLogout}>
+              Выйти
+            </button>
+          ) : (
+            <button className="outline-button sidebar-wide-button" onClick={() => setActiveTab('Settings')}>
+              <Icon name="user" />
+              Войти
+            </button>
+          )}
+        </div>
+
+        <button
+          type="button"
+          className={`boost-card ${kuroBoostEnabled ? 'active' : ''}`}
+          onClick={() => setKuroBoost(!kuroBoostEnabled)}
+          aria-pressed={kuroBoostEnabled}
+          title="KuroBoost оптимизирует параметры Minecraft и Java перед запуском профиля."
+        >
+          <div className="boost-head">
+            <Icon name="shield" />
+            <div>
+              <div className="boost-title">KuroBoost</div>
+              <div className="boost-text">AI-профиль запуска</div>
+            </div>
+          </div>
+          <div className="boost-toggle">
+            <span>{kuroBoostEnabled ? 'Вкл' : 'Выкл'}</span>
+            <span className={`toggle-pill ${kuroBoostEnabled ? 'active' : ''}`}><span /></span>
+          </div>
+        </button>
+      </aside>
+
+      <div className="workspace-shell">
+        <div className="header glass-panel">
+          <div className="header-left">
+            <div className={`header-status ${isBusy ? 'loading' : ''}`}>
+              <span className="status-dot"></span>
+              {status}
+            </div>
+          </div>
+          <label className="top-search">
+            <Icon name="search" />
+            <input
+              value={versionSearch}
+              onChange={(e) => {
+                setVersionSearch(e.target.value)
+                setCurrentPage(1)
+                setActiveTab('Versions')
+              }}
+              placeholder="Поиск версии..."
+            />
+          </label>
+        </div>
 
       {isBusy && progressInfo && (
         <div className="progress-panel">
@@ -1287,7 +1960,7 @@ function App() {
         </div>
       )}
 
-      <main className="content">
+      <main className={`content ${activeTab === 'Settings' ? 'settings-content' : ''}`}>
         {activeTab === 'Skins' && (
           <section className="skins-grid">
             <div className="panel panel large">
@@ -1396,80 +2069,258 @@ function App() {
           </section>
         )}
         {activeTab === 'Dashboard' && (
-          <section className="dashboard-grid">
-            <div className="panel">
-              <div className="panel-title">Новости</div>
-              <div className="news-list">
-                {newsItems.map((item, index) => (
+          <section className="dashboard-grid dashboard-modern">
+            <div className="dashboard-main-column">
+              <motion.section
+                className="hero-card hero-carousel-card"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.45 }}
+              >
+                <AnimatePresence initial={false}>
+                  <motion.div
+                    key={`${activeHeroSlide.id}-background`}
+                    className="hero-slide-bg"
+                    style={{ '--hero-image': `url(${activeHeroSlide.image})` } as any}
+                    initial={{ opacity: 0, scale: 1.045, x: 18 }}
+                    animate={{ opacity: 1, scale: 1, x: 0 }}
+                    exit={{ opacity: 0, scale: 1.025, x: -16 }}
+                    transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }}
+                    aria-hidden="true"
+                  />
+                </AnimatePresence>
+                <button
+                  type="button"
+                  className="hero-nav hero-nav-prev"
+                  onClick={() => changeHeroSlide((index) => index - 1)}
+                  aria-label="Предыдущая новость"
+                  title="Предыдущая новость"
+                >
+                  <Icon name="chevron" />
+                </button>
+                <button
+                  type="button"
+                  className="hero-nav hero-nav-next"
+                  onClick={() => changeHeroSlide((index) => index + 1)}
+                  aria-label="Следующая новость"
+                  title="Следующая новость"
+                >
+                  <Icon name="chevron" />
+                </button>
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.div
+                    key={activeHeroSlide.id}
+                    className="hero-copy"
+                    initial={{ opacity: 0, x: 24, filter: 'blur(8px)' }}
+                    animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, x: -18, filter: 'blur(8px)' }}
+                    transition={{ duration: 0.46, ease: [0.22, 1, 0.36, 1] }}
+                  >
+                    <span className="hero-kicker">{activeHeroSlide.kicker}</span>
+                    <h1>{activeHeroSlide.title}</h1>
+                    <p>{activeHeroSlide.body}</p>
+                    <div className="hero-meta-row">
+                      {activeHeroSlide.meta.map((item) => (
+                        <span key={item}>{item}</span>
+                      ))}
+                    </div>
+                    <div className="hero-actions">
+                      {activeHeroSlide.actions.map((action) => (
+                        <button
+                          key={action.id}
+                          className={`btn btn-${action.variant}`}
+                          disabled={action.disabled}
+                          onClick={action.onClick}
+                        >
+                          <Icon name={action.icon} />
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                </AnimatePresence>
+                <div key={`${activeHeroSlide.id}-${heroAutoplayResetKey}`} className="hero-progress" aria-hidden="true">
+                  <span />
+                </div>
+                <div
+                  className="hero-dots"
+                  aria-label="Новости на главном экране"
+                  style={{ '--dot-offset': `${activeHeroIndex * 38}px` } as any}
+                >
+                  <span className="hero-dot-glider" aria-hidden="true" />
+                  {heroSlides.map((slide, index) => (
+                    <button
+                      key={slide.id}
+                      type="button"
+                      className={index === activeHeroIndex ? 'active' : ''}
+                      onClick={() => changeHeroSlide(index)}
+                      aria-label={`Открыть новость: ${slide.title}`}
+                      aria-current={index === activeHeroIndex ? 'true' : undefined}
+                    />
+                  ))}
+                </div>
+              </motion.section>
+
+              <div className="section-heading">
+                <div>
+                  <span className="section-marker" />
+                  <h2>Новости и обновления</h2>
+                </div>
+                <button className="icon-button" onClick={loadMeta} title="Обновить версии">
+                  <Icon name="refresh" />
+                </button>
+              </div>
+
+              <div className="news-grid">
+                {dashboardNewsItems.map((item, index) => (
                   <motion.article
                     key={item.title}
-                    className="news-card animate-fade-in-up"
-                    initial={{ opacity: 0, y: 20 }}
+                    className={`news-card rich-news-card news-card-${index + 1}`}
+                    style={{ '--news-image': `url(${item.image})` } as any}
+                    initial={{ opacity: 0, y: 18 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5, delay: index * 0.1 }}
+                    transition={{ duration: 0.45, delay: index * 0.08 }}
                   >
-                    <h3>{item.title}</h3>
-                    <p>{item.body}</p>
+                    <div className="news-media">
+                      <Icon name={item.icon} />
+                      <span>{item.tag}</span>
+                    </div>
+                    <div className="news-content">
+                      <h3>{item.title}</h3>
+                      <p>{item.body}</p>
+                      <span>{item.date}</span>
+                    </div>
                   </motion.article>
                 ))}
               </div>
-            </div>
 
-            <div className="panel">
-              <div className="panel-title">Управление</div>
-              <div className="stats-grid">
-                <div className="stat-card">
-                  <div className="stat-header">
-                    <span className="stat-label">Версий установлено</span>
-                    <span className="stat-value">{installed.length}</span>
-                  </div>
-                  <div className="stat-bar">
-                    <motion.div
-                      className="stat-bar-fill"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(100, installed.length * 10)}%` }}
-                      transition={{ duration: 1, delay: 0.2 }}
-                    />
-                  </div>
-                </div>
-
-                <div className="stat-card">
-                  <div className="stat-header">
-                    <span className="stat-label">Профилей</span>
-                    <span className="stat-value">{profiles.length}</span>
-                  </div>
-                  <div className="stat-bar">
-                    <motion.div
-                      className="stat-bar-fill"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(100, profiles.length * 20)}%` }}
-                      transition={{ duration: 1, delay: 0.4 }}
-                    />
-                  </div>
-                </div>
-
-                <div className="stat-card">
-                  <div className="stat-header">
-                    <span className="stat-label">RAM использование</span>
-                    <span className="stat-value">2.1 GB</span>
-                  </div>
-                  <div className="stat-bar">
-                    <motion.div
-                      className="stat-bar-fill"
-                      initial={{ width: 0 }}
-                      animate={{ width: '35%' }}
-                      transition={{ duration: 1, delay: 0.6 }}
-                    />
-                  </div>
+              <div className="section-heading quick-heading">
+                <div>
+                  <span className="section-marker" />
+                  <h2>Быстрый доступ</h2>
                 </div>
               </div>
 
-              <div style={{ marginTop: '24px' }}>
-                <button className="btn btn-primary" onClick={loadMeta}>
-                  Обновить версии
+              <div className="quick-grid">
+                <button className="quick-card" onClick={() => setActiveTab('Profiles')}>
+                  <span className="quick-icon red"><Icon name="folder" /></span>
+                  <span>
+                    <strong>Локальные профили</strong>
+                    <small>Быстрая загрузка профилей</small>
+                  </span>
+                </button>
+                <button className="quick-card" onClick={() => setActiveTab('Mods')}>
+                  <span className="quick-icon dark-red"><Icon name="mods" /></span>
+                  <span>
+                    <strong>Моды</strong>
+                    <small>Модпаки, ресурсы и шейдеры</small>
+                  </span>
+                </button>
+                <button className="quick-card" onClick={() => setActiveTab('Skins')}>
+                  <span className="quick-icon wine"><Icon name="shirt" /></span>
+                  <span>
+                    <strong>Скины</strong>
+                    <small>Библиотека скинов и плащей</small>
+                  </span>
+                </button>
+                <button className="quick-card" onClick={() => setActiveTab('Settings')}>
+                  <span className="quick-icon ember"><Icon name="settings" /></span>
+                  <span>
+                    <strong>Настройки</strong>
+                    <small>Java, RAM и запуск</small>
+                  </span>
                 </button>
               </div>
             </div>
+
+            <aside className="dashboard-side-column">
+              <section className="side-widget profile-widget">
+                <div className="widget-title-row">
+                  <span className="section-marker" />
+                  <h2>Ваш профиль</h2>
+                  <button className="icon-button" onClick={() => setActiveTab('Settings')} title="Настройки">
+                    <Icon name="settings" />
+                  </button>
+                </div>
+                <div className="profile-widget-body">
+                  <button className={`user-avatar big-avatar ${launcherAvatar ? 'has-image' : ''}`} onClick={() => setActiveTab('Settings')} aria-label="Открыть настройки профиля">
+                    {launcherAvatar ? <img src={launcherAvatar} alt="" /> : userInitials}
+                  </button>
+                  <div>
+                    <div className="user-name">{launcherProfileName}</div>
+                    <div className="user-email">{launcherProfileSubtitle}</div>
+                  </div>
+                </div>
+                <button className="outline-button sidebar-wide-button" onClick={() => setActiveTab(auth.loggedIn ? 'Profiles' : 'Settings')}>
+                  <Icon name={auth.loggedIn ? 'profiles' : 'user'} />
+                  {auth.loggedIn ? 'Мои профили' : 'Войти в аккаунт'}
+                </button>
+              </section>
+
+              <section className="side-widget friends-widget">
+                <div className="widget-title-row">
+                  <h2>Друзья</h2>
+                  <span className="online-label">0 онлайн</span>
+                </div>
+                <div className="empty-friends">
+                  <Icon name="friends" />
+                  <p>Войдите, чтобы видеть статус друзей и играть вместе.</p>
+                </div>
+              </section>
+
+              <section className="side-widget stats-widget">
+                <div className="widget-title-row">
+                  <h2>Статистика</h2>
+                </div>
+                <div className="stats-grid compact-stats">
+                  <div className="stat-card">
+                    <div className="stat-header">
+                      <span className="stat-label">Версий установлено</span>
+                      <span className="stat-value">{installed.length}</span>
+                    </div>
+                    <div className="stat-bar">
+                      <motion.div className="stat-bar-fill" initial={{ width: 0 }} animate={{ width: `${Math.min(100, installed.length * 10)}%` }} transition={{ duration: 1, delay: 0.2 }} />
+                    </div>
+                  </div>
+                  <div className="stat-card">
+                    <div className="stat-header">
+                      <span className="stat-label">Профилей</span>
+                      <span className="stat-value">{profiles.length}</span>
+                    </div>
+                    <div className="stat-bar">
+                      <motion.div className="stat-bar-fill" initial={{ width: 0 }} animate={{ width: `${Math.min(100, profiles.length * 20)}%` }} transition={{ duration: 1, delay: 0.4 }} />
+                    </div>
+                  </div>
+                  <div className="stat-card">
+                    <div className="stat-header">
+                      <span className="stat-label">RAM выделено</span>
+                      <span className="stat-value">{ramLabel}</span>
+                    </div>
+                    <div className="stat-bar">
+                      <motion.div className="stat-bar-fill" initial={{ width: 0 }} animate={{ width: ramBarWidth }} transition={{ duration: 1, delay: 0.6 }} />
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div className="social-row">
+                {socialLinks.map((link) => (
+                  <a
+                    key={link.id}
+                    className="social-button"
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={link.title}
+                    aria-label={link.title}
+                    onClick={(event) => openExternalLink(event, link.url)}
+                  >
+                    <Icon name={link.icon} />
+                  </a>
+                ))}
+              </div>
+              <div className="launcher-footnote">KuroLauncher {APP_VERSION} • 2026</div>
+            </aside>
           </section>
         )}
 
@@ -1555,19 +2406,22 @@ function App() {
               )}
             </div>
 
-            <div className="panel panel small">
+            <div className="panel panel small installed-versions-panel">
               <div className="panel-title">Установленные</div>
-              <div className="installed-list">
+              <div className="installed-list installed-version-list">
                 {installed.length === 0 && <div className="hint">Нет установленных версий</div>}
                 {installed.map((item) => (
-                  <div key={item.id} className="installed-item">
-                    <span>{item.id}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span>{item.status}</span>
+                  <div key={item.id} className="installed-item installed-version-item">
+                    <div className="installed-version-main">
+                      <span className="installed-version-id" title={item.id}>{item.id}</span>
+                      <span className="installed-version-status">{item.status}</span>
+                    </div>
+                    <div className="installed-version-actions">
                       <button
-                        className="outline-button delete-button"
+                        className="outline-button delete-button installed-version-delete"
                         onClick={() => deleteInstalledVersion(item.id)}
                         disabled={isBusy}
+                        title={`Удалить ${item.id}`}
                       >
                         Удалить
                       </button>
@@ -1601,7 +2455,7 @@ function App() {
                         {profile.loaderVersion ? ` ${profile.loaderVersion}` : ''}
                       </div>
                       <div className="profile-chip-row">
-                        <span className="profile-chip">{profile.ram === 'auto' ? 'RAM: авто' : `RAM: ${profile.ram}`}</span>
+                        <span className="profile-chip">{formatProfileRam(profile, settings)}</span>
                         <span className="profile-chip">{profile.javaPath && profile.javaPath !== settings.javaPath ? 'Java: своя' : 'Java: общая'}</span>
                         <span className="profile-chip">{formatProfileFullscreen(profile.fullscreenMode)}</span>
                       </div>
@@ -1666,7 +2520,7 @@ function App() {
                     installed={installed}
                     availableLoaderVersions={availableLoaderVersions}
                     loaderVersionLoading={loaderVersionLoading}
-                    ramOptions={ramOptions}
+                    ramOptions={profileRamOptions}
                     resetTrigger={profileFormResetTrigger}
                     onLoaderVersionChange={(versionId, loader) => fetchLoaderVersions(versionId, loader as any)}
                     showAlert={showAlert}
@@ -1682,7 +2536,7 @@ function App() {
                     installed={installed}
                     availableLoaderVersions={availableLoaderVersions}
                     loaderVersionLoading={loaderVersionLoading}
-                    ramOptions={ramOptions}
+                    ramOptions={profileRamOptions}
                     resetTrigger={profileFormResetTrigger}
                     onLoaderVersionChange={(versionId, loader) => fetchLoaderVersions(versionId, loader as any)}
                     showAlert={showAlert}
@@ -1698,7 +2552,91 @@ function App() {
         {activeTab === 'Mods' && (
           <section className="modrinth-grid scrollable-content">
             <div className="panel panel large">
-              <div className="panel-title">Браузер модов</div>
+              <div className="panel-title">Модпаки</div>
+              <div className="modpack-workbench">
+                <div className="modpack-workbench-panel">
+                  <div className="workbench-title">Цель установки</div>
+                  <CustomSelect
+                    options={modpackTargetOptions}
+                    value={selectedModpackTarget}
+                    onChange={(val: string) => setSelectedModpackTarget(val)}
+                    placeholder="Выберите модпак"
+                  />
+                  {selectedModpackProfile ? (
+                    <div className="target-summary">
+                      <div className="target-name">{selectedModpackProfile.name}</div>
+                      <div className="target-chip-row">
+                        <span className="target-chip">{selectedModpackProfile.versionId}</span>
+                        <span className="target-chip">{formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion)}</span>
+                        <span className="target-chip">{formatProfileRam(selectedModpackProfile, settings)}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="target-warning">Перед установкой модов, ресурспаков или шейдеров выберите модпак.</div>
+                  )}
+                </div>
+
+                <div className="modpack-workbench-panel">
+                  <div className="workbench-title">Создать свой модпак</div>
+                  <div className="modpack-create-grid">
+                    <label>
+                      Название
+                      <input
+                        value={modpackCreateForm.name}
+                        onChange={(e) => setModpackCreateForm((prev) => ({ ...prev, name: e.target.value }))}
+                        placeholder="Например Kuro Survival"
+                      />
+                    </label>
+                    <label>
+                      Версия Minecraft
+                      <CustomSelect
+                        options={[{ value: '', label: 'Выберите версию' }, ...versionSelectOptions]}
+                        value={modpackCreateForm.versionId}
+                        onChange={(val: string) => setModpackCreateForm((prev) => ({ ...prev, versionId: val, loaderVersion: '' }))}
+                        placeholder="Версия"
+                      />
+                    </label>
+                    <label>
+                      Модлоадер
+                      <CustomSelect
+                        options={[
+                          { value: 'forge', label: 'Forge' },
+                          { value: 'fabric', label: 'Fabric' },
+                          { value: 'quilt', label: 'Quilt' },
+                          { value: 'neoforge', label: 'NeoForge' },
+                          { value: 'vanilla', label: 'Vanilla' }
+                        ]}
+                        value={modpackCreateForm.loader}
+                        onChange={(val: Profile['loader']) => setModpackCreateForm((prev) => ({ ...prev, loader: val, loaderVersion: '' }))}
+                        placeholder="Модлоадер"
+                      />
+                    </label>
+                    <label>
+                      Версия модлоадера
+                      <CustomSelect
+                        options={[
+                          { value: '', label: modpackCreateForm.loader === 'vanilla' ? 'Не требуется' : modpackCreateLoaderLoading ? 'Загрузка...' : 'Выберите версию' },
+                          ...modpackCreateLoaderVersions
+                        ]}
+                        value={modpackCreateForm.loaderVersion}
+                        onChange={(val: string) => setModpackCreateForm((prev) => ({ ...prev, loaderVersion: val }))}
+                        placeholder="Версия модлоадера"
+                        disabled={modpackCreateForm.loader === 'vanilla' || modpackCreateLoaderLoading}
+                      />
+                    </label>
+                    <button className="button" onClick={createCustomModpack} disabled={modpackCreateLoading || modpackCreateLoaderLoading}>
+                      Создать модпак
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel-title" style={{ marginTop: 18 }}>Браузер Modrinth</div>
+              {selectedModpackProfile && isTargetedModrinthType && (
+                <div className="modrinth-filter-note">
+                  Поиск дополнений идёт под выбранный модпак: {selectedModpackProfile.versionId} • {formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion)}
+                </div>
+              )}
               <div className="form-grid">
                 <label>
                   Поиск
@@ -1706,7 +2644,12 @@ function App() {
                 </label>
                 <label>
                   Версия Minecraft
-                  <input value={modrinthSearchVersion} onChange={(e) => setModrinthSearchVersion(e.target.value)} placeholder="Например 1.20.1" />
+                  <input
+                    value={effectiveModrinthVersion}
+                    onChange={(e) => setModrinthSearchVersion(e.target.value)}
+                    placeholder="Например 1.20.1"
+                    disabled={Boolean(selectedModpackProfile && isTargetedModrinthType)}
+                  />
                 </label>
                 <label>
                   Загрузчик
@@ -1718,9 +2661,10 @@ function App() {
                       { value: 'quilt', label: 'Quilt' },
                       { value: 'neoforge', label: 'NeoForge' }
                     ]}
-                    value={modrinthSearchLoader}
+                    value={effectiveModrinthLoader}
                     onChange={(val: string) => setModrinthSearchLoader(val)}
                     placeholder="Загрузчик"
+                    disabled={Boolean(selectedModpackProfile && isTargetedModrinthType)}
                   />
                 </label>
                 <label>
@@ -1769,7 +2713,9 @@ function App() {
                         <span className="small-text">Загрузки: {item.downloads ?? 0}</span>
                         <span className="small-text">   Версий: {item.versions?.length ?? 0}</span>
                       </div>
-                      <button className="outline-button" onClick={() => installModrinthProject(item.slug)} disabled={modrinthLoading}>Установить</button>
+                      <button className="outline-button" onClick={() => installModrinthProject(item)} disabled={modrinthLoading || isBusy}>
+                        {item.project_type === 'modpack' ? 'Скачать модпак' : 'Скачать'}
+                      </button>
                     </div>
                   </article>
                 ))}
@@ -1787,12 +2733,20 @@ function App() {
             <div className="panel panel small">
               <div className="panel-title">Установленные дополнения</div>
               <div className="installed-list">
-                {modrinthInstalledAddons.length === 0 && <div className="hint">Пока нет установленных модов/шейдеров/ресурсов.</div>}
+                {modrinthInstalledAddons.length === 0 && Object.keys(organizedAddons.modpacks).length === 0 && (
+                  <div className="hint">Пока нет установленных модов/шейдеров/ресурсов.</div>
+                )}
 
-                {/* Standalone addons (not from modpacks) */}
-                {organizedAddons.standalone.length > 0 && (
+                {organizedAddons.standaloneTotal > 0 && (
                   <div className="modpack-section">
-                    <div className="modpack-header" onClick={() => setStandaloneExpanded(!standaloneExpanded)} style={{ cursor: 'pointer' }}>
+                    <div
+                      className="modpack-header"
+                      onClick={() => {
+                        setStandaloneExpanded(!standaloneExpanded)
+                        if (!standaloneExpanded) setExpandedModpacks(new Set())
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    >
                       <div className="modpack-title">
                         <svg
                           width="16"
@@ -1813,8 +2767,8 @@ function App() {
                           <path d="m8 5 4-3 4 3" stroke="currentColor" strokeWidth="1.6"/>
                         </svg>
                         Отдельные дополнения
-                        <span style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>
-                          {organizedAddons.standalone.length} дополнений
+                        <span className="modpack-subtitle">
+                          {organizedAddons.standaloneTotal} дополнений
                         </span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1839,39 +2793,28 @@ function App() {
                         exit={{ height: 0, opacity: 0 }}
                         transition={{ duration: 0.2 }}
                       >
-                        {organizedAddons.standalone.map((addon) => (
-                          <div key={addon.id} className="installed-item">
-                            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                              <span>{addon.name}</span>
-                              <span style={{ fontSize: 12, color: '#999' }}>
-                                {addon.type} • {addon.enabled ? 'Включен' : 'Отключен'}
-                              </span>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <button className="outline-button" onClick={() => toggleAddon(addon)}>
-                                {addon.enabled ? 'Отключить' : 'Включить'}
-                              </button>
-                              <button className="outline-button delete-button" onClick={() => deleteAddon(addon)}>
-                                Удалить
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                        <div className="addon-category-grid">
+                          {renderAddonCategory('standalone', 'mods', organizedAddons.standalone.mods, getDefaultAddonCategory(organizedAddons.standalone))}
+                          {renderAddonCategory('standalone', 'resourcepacks', organizedAddons.standalone.resourcepacks, getDefaultAddonCategory(organizedAddons.standalone))}
+                          {renderAddonCategory('standalone', 'shaderpacks', organizedAddons.standalone.shaderpacks, getDefaultAddonCategory(organizedAddons.standalone))}
+                        </div>
                       </motion.div>
                     )}
                   </div>
                 )}
 
-                {/* Modpack sections */}
-                {Object.entries(organizedAddons.modpacks).map(([modpackKey, addons]) => {
-                  const firstAddon = addons[0]
-                  const origin = firstAddon.origin
-                  const modpackTitle = origin?.projectTitle || origin?.modpackId || 'Modpack'
-                  const isExpanded = expandedModpacks.has(modpackKey)
+                {Object.values(organizedAddons.modpacks).map((pack: any) => {
+                  const isExpanded = expandedModpacks.has(pack.key)
+                  const categoryCounts = {
+                    mods: pack.categories.mods.length,
+                    resourcepacks: pack.categories.resourcepacks.length,
+                    shaderpacks: pack.categories.shaderpacks.length
+                  }
+                  const defaultCategory = getDefaultAddonCategory(pack.categories)
 
                   return (
-                    <div key={modpackKey} className="modpack-section">
-                      <div className="modpack-header" onClick={() => toggleModpackExpansion(modpackKey)} style={{ cursor: 'pointer' }}>
+                    <div key={pack.key} className="modpack-section">
+                      <div className="modpack-header" onClick={() => toggleModpackExpansion(pack.key)} style={{ cursor: 'pointer' }}>
                         <div className="modpack-title">
                           <svg
                             width="16"
@@ -1887,21 +2830,30 @@ function App() {
                           >
                             <path d="M9 18l6-6-6-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
                           </svg>
-                          {modpackTitle}
-                          <span style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>
-                            {origin?.detectedLoader} • {addons.length} дополнений
-                          </span>
+                          <div className="modpack-title-stack">
+                            <span>{pack.title}</span>
+                            <span className="modpack-subtitle">
+                              {pack.gameVersion || 'Версия не указана'} • {formatLoaderName(pack.loader, pack.loaderVersion)} • {pack.total} дополнений
+                            </span>
+                            <span className="modpack-category-pills">
+                              <span>Моды {categoryCounts.mods}</span>
+                              <span>Рес. {categoryCounts.resourcepacks}</span>
+                              <span>Шейд. {categoryCounts.shaderpacks}</span>
+                            </span>
+                          </div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <button
                             className="outline-button delete-button"
                             onClick={(e) => {
                               e.stopPropagation()
-                              deleteModpack(modpackKey, modpackTitle)
+                              deleteModpack(pack.key, pack.title)
                             }}
                             style={{ fontSize: 12, padding: '4px 8px' }}
+                            aria-label={`Удалить модпак ${pack.title}`}
+                            title="Удалить модпак"
                           >
-                            Удалить пак
+                            ×
                           </button>
                         </div>
                       </div>
@@ -1914,24 +2866,11 @@ function App() {
                           exit={{ height: 0, opacity: 0 }}
                           transition={{ duration: 0.2 }}
                         >
-                          {addons.map((addon) => (
-                            <div key={addon.id} className="installed-item">
-                              <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                                <span>{addon.name}</span>
-                                <span style={{ fontSize: 12, color: '#999' }}>
-                                  {addon.type} • {addon.enabled ? 'Включен' : 'Отключен'}
-                                </span>
-                              </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <button className="outline-button" onClick={() => toggleAddon(addon)}>
-                                  {addon.enabled ? 'Отключить' : 'Включить'}
-                                </button>
-                                <button className="outline-button delete-button" onClick={() => deleteAddon(addon)}>
-                                  Удалить
-                                </button>
-                              </div>
-                            </div>
-                          ))}
+                          <div className="addon-category-grid">
+                            {renderAddonCategory(pack.key, 'mods', pack.categories.mods, defaultCategory)}
+                            {renderAddonCategory(pack.key, 'resourcepacks', pack.categories.resourcepacks, defaultCategory)}
+                            {renderAddonCategory(pack.key, 'shaderpacks', pack.categories.shaderpacks, defaultCategory)}
+                          </div>
                         </motion.div>
                       )}
                     </div>
@@ -2025,9 +2964,69 @@ function App() {
               </div>
               <p className="hint">Локальная авторизация хранится безопасно в хранилище KuroLauncher.</p>
             </div>
+
+            <div className="panel profile-settings-panel">
+              <div className="profile-settings-heading">
+                <div>
+                  <div className="panel-title">Профиль лаунчера</div>
+                  <p className="profile-settings-caption">Имя, статус и аватар для интерфейса KuroLauncher.</p>
+                </div>
+                <span className="profile-settings-badge">{auth.loggedIn ? 'Аккаунт' : 'Локальный'}</span>
+              </div>
+
+              <div className="profile-settings-layout">
+                <div className="profile-settings-preview">
+                  <div className="profile-settings-avatar-stack">
+                    <label className={`profile-settings-avatar ${launcherAvatar ? 'has-image' : ''}`}>
+                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAvatarUpload} aria-label="Выбрать аватар профиля" />
+                      {launcherAvatar ? <img src={launcherAvatar} alt="" /> : <span>{userInitials}</span>}
+                    </label>
+                    <div className="profile-settings-avatar-actions">
+                      <label className="outline-button profile-avatar-upload">
+                        Выбрать аватар
+                        <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAvatarUpload} aria-label="Выбрать аватар профиля" />
+                      </label>
+                      <button className="outline-button" onClick={() => setSettings({ ...settings, avatarDataUrl: '' })}>
+                        Сбросить аватар
+                      </button>
+                    </div>
+                  </div>
+                  <div className="profile-settings-preview-copy">
+                    <strong>{launcherProfileName}</strong>
+                    <span>{launcherProfileSubtitle}</span>
+                  </div>
+                </div>
+
+                <div className="profile-settings-form">
+                  <label>
+                    Имя в лаунчере
+                    <input
+                      value={settings.profileName || ''}
+                      maxLength={32}
+                      placeholder={auth.loggedIn ? 'Пользователь' : 'Гость'}
+                      onChange={(e) => setSettings({ ...settings, profileName: e.target.value.slice(0, 32) })}
+                    />
+                  </label>
+                  <label className="profile-settings-wide">
+                    Статус
+                    <textarea
+                      value={settings.profileStatus || ''}
+                      maxLength={80}
+                      rows={2}
+                      placeholder="Готов к запуску"
+                      onChange={(e) => setSettings({ ...settings, profileStatus: e.target.value.slice(0, 80) })}
+                    />
+                  </label>
+                  <button className="button profile-settings-save" onClick={handleSaveSettings}>
+                    Сохранить профиль
+                  </button>
+                </div>
+              </div>
+            </div>
           </section>
         )}
       </main>
+      </div>
 
       {/* Custom Confirm/Alert Dialog */}
       {confirmDialog && (
