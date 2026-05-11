@@ -24,9 +24,9 @@ declare global {
       launchProfile: (profileId: string, launcherProfileName?: string) => Promise<boolean>
       deleteProfile: (profileId: string) => Promise<boolean>
       searchModrinth: (query: string, options?: any) => Promise<any>
-      getModrinthProject: (projectId: string) => Promise<any>
-      getModrinthVersions: (projectId: string) => Promise<any>
-      getModrinthVersion: (versionId: string) => Promise<any>
+      getModrinthProject: (projectId: string, options?: any) => Promise<any>
+      getModrinthVersions: (projectId: string, options?: any) => Promise<any>
+      getModrinthVersion: (versionId: string, options?: any) => Promise<any>
       installModrinthProject: (projectId: string, options?: any) => Promise<any>
       installModrinthVersion: (versionId: string, options?: any) => Promise<any>
       getInstalledModrinthAddons: () => Promise<any[]>
@@ -34,6 +34,8 @@ declare global {
       deleteInstalledAddon: (type: string, name: string, addonPath?: string) => Promise<any>
       deleteModpackDirectory: (modpackKey: string) => Promise<boolean>
       openExternal: (targetUrl: string) => Promise<{ ok: boolean; error?: string }>
+      saveSkin: (profileId: string, base64Data?: string | null, options?: { model?: 'classic' | 'slim'; username?: string }) => Promise<any>
+      getSkinUrl: (profileId: string) => Promise<string | null>
     }
     windowControls?: {
       minimize: () => Promise<any>

@@ -1,4 +1,4 @@
-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 const logoIcon = new URL('../logo/KuroLauncher.png', import.meta.url).href;
@@ -9,7 +9,7 @@ const heroBoostArtwork = new URL('./assets/hero-boost.png', import.meta.url).hre
 const newsUpdateArtwork = new URL('./assets/news-update.png', import.meta.url).href;
 const newsReleaseArtwork = new URL('./assets/news-release.png', import.meta.url).href;
 const newsBoostArtwork = new URL('./assets/news-boost.png', import.meta.url).href;
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 const tabs = [
     { id: 'Dashboard', label: 'Главная', icon: 'home' },
     { id: 'Versions', label: 'Версии', icon: 'versions' },
@@ -150,6 +150,117 @@ function formatLoaderName(loader, loaderVersion) {
 }
 function formatAddonType(type) {
     return addonCategoryLabels[type || ''] || type || 'Дополнение';
+}
+const modrinthProjectTypeLabels = {
+    mod: 'Мод',
+    modpack: 'Модпак',
+    resourcepack: 'Ресурспак',
+    shader: 'Шейдер'
+};
+const modrinthVersionTypeLabels = {
+    release: 'Релиз',
+    beta: 'Бета',
+    alpha: 'Альфа'
+};
+function formatModrinthProjectType(type) {
+    return modrinthProjectTypeLabels[type || ''] || type || 'Проект';
+}
+function formatCompactNumber(value) {
+    const number = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+    return new Intl.NumberFormat('ru-RU', { notation: 'compact', maximumFractionDigits: 1 }).format(number);
+}
+function formatModrinthDate(value) {
+    if (!value)
+        return 'Дата не указана';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime()))
+        return 'Дата не указана';
+    return new Intl.DateTimeFormat('ru-RU', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+    }).format(date);
+}
+function getModrinthProjectId(item) {
+    return item?.slug || item?.project_id || item?.id || '';
+}
+function getModrinthProjectUrl(project) {
+    const slug = project?.slug || project?.project_id || project?.id;
+    return slug ? `https://modrinth.com/${project?.project_type || 'mod'}/${slug}` : 'https://modrinth.com';
+}
+function formatSideSupport(value) {
+    if (value === 'required')
+        return 'требуется';
+    if (value === 'optional')
+        return 'опционально';
+    if (value === 'unsupported')
+        return 'не поддерживается';
+    return value || 'не указано';
+}
+function getVersionPrimaryFile(version) {
+    const files = Array.isArray(version?.files) ? version.files : [];
+    return files.find((file) => file?.primary) || files[0] || null;
+}
+function formatFileSize(bytes) {
+    if (!bytes || !Number.isFinite(bytes))
+        return '';
+    const mb = bytes / 1024 / 1024;
+    if (mb >= 1)
+        return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+function summarizeVersionFile(version) {
+    const file = getVersionPrimaryFile(version);
+    if (!file)
+        return 'Файл не указан';
+    const size = formatFileSize(file.size);
+    return [file.filename, size].filter(Boolean).join(' • ');
+}
+function normalizeMarkdownText(value) {
+    return String(value || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/<img\b[^>]*>/gi, '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .split('\n')
+        .map((line) => line.replace(/[*_~`>#]/g, '').trim())
+        .filter((line) => line && !/^https?:\/\//i.test(line) && !/^(src|alt|width|height)=/i.test(line))
+        .join('\n')
+        .trim();
+}
+function getProjectBodySummary(project) {
+    const body = normalizeMarkdownText(project?.body || project?.description || '');
+    if (!body)
+        return 'Описание отсутствует.';
+    return body.length > 2400 ? `${body.slice(0, 2400).trim()}...` : body;
+}
+function getProjectGalleryImages(project) {
+    const gallery = Array.isArray(project?.gallery) ? project.gallery : [];
+    return gallery
+        .map((image, index) => ({
+        ...image,
+        index,
+        url: image?.url || image?.raw_url || image?.thumbnail_url || '',
+        title: image?.title || `Изображение ${index + 1}`,
+        description: normalizeMarkdownText(image?.description || '').slice(0, 220)
+    }))
+        .filter((image) => image.url)
+        .sort((a, b) => {
+        if (Boolean(a.featured) !== Boolean(b.featured))
+            return a.featured ? -1 : 1;
+        const aOrder = typeof a.ordering === 'number' ? a.ordering : a.index;
+        const bOrder = typeof b.ordering === 'number' ? b.ordering : b.index;
+        return aOrder - bOrder;
+    });
 }
 function normalizeAccent(accent) {
     if (accent === 'violet' || accent === 'white')
@@ -328,28 +439,28 @@ function normalizeSettings(settings) {
 }
 const newsItems = [
     {
-        title: 'Настройки сохраняются сами',
-        tag: 'Настройки',
+        title: 'Скины ставятся в игру',
+        tag: 'Скины',
         date: 'Сегодня',
-        icon: 'settings',
+        icon: 'shirt',
         image: newsUpdateArtwork,
-        body: 'Тема, акцент, RAM, Java и fullscreen теперь остаются после перезапуска лаунчера.'
+        body: 'Лаунчер сам готовит CustomSkinLoader, кладёт PNG в профиль и подключает его через модлоадер.'
     },
     {
-        title: 'Главный экран стал живым',
-        tag: 'Интерфейс',
+        title: 'Modrinth стал полноценным',
+        tag: 'Моды',
         date: 'Сегодня',
-        icon: 'spark',
+        icon: 'mods',
         image: newsReleaseArtwork,
-        body: 'Верхний баннер теперь перелистывает новости, показывает прогресс и ведёт к нужным разделам.'
+        body: 'У проектов появились страницы с версиями, фильтрами, установкой конкретного релиза и изображениями.'
     },
     {
-        title: 'Светлая тема отполирована',
-        tag: 'UI',
+        title: 'Модпаки запускаются стабильнее',
+        tag: 'Запуск',
         date: 'Обновлено',
         icon: 'shield',
         image: newsBoostArtwork,
-        body: 'Белый акцент больше не уводит фон в синий, а красный стал глубже и спокойнее.'
+        body: 'Установщик стал аккуратнее с зависимостями, ресурсами и шейдерами, а запуск лаунчера ускорен.'
     }
 ];
 function App() {
@@ -388,6 +499,16 @@ function App() {
     const [modrinthTotalHits, setModrinthTotalHits] = useState(0);
     const [modrinthLoading, setModrinthLoading] = useState(false);
     const [modrinthInstalledAddons, setModrinthInstalledAddons] = useState([]);
+    const [modrinthBrowserView, setModrinthBrowserView] = useState('search');
+    const [selectedModrinthProject, setSelectedModrinthProject] = useState(null);
+    const [selectedModrinthVersions, setSelectedModrinthVersions] = useState([]);
+    const [selectedModrinthVersionId, setSelectedModrinthVersionId] = useState('');
+    const [modrinthProjectTab, setModrinthProjectTab] = useState('versions');
+    const [selectedModrinthImageIndex, setSelectedModrinthImageIndex] = useState(0);
+    const [modrinthDetailLoading, setModrinthDetailLoading] = useState(false);
+    const [modrinthVersionGameFilter, setModrinthVersionGameFilter] = useState('');
+    const [modrinthVersionLoaderFilter, setModrinthVersionLoaderFilter] = useState('');
+    const [modrinthVersionReleaseFilter, setModrinthVersionReleaseFilter] = useState('');
     const [selectedModpackTarget, setSelectedModpackTarget] = useState('');
     const [modpackCreateForm, setModpackCreateForm] = useState({
         name: '',
@@ -459,6 +580,36 @@ function App() {
             ? (selectedModpackProfile.loader === 'vanilla' ? '' : selectedModpackProfile.loader)
             : '')
         : modrinthSearchLoader;
+    const selectedModrinthProjectType = selectedModrinthProject?.project_type || '';
+    const modrinthVersionGameOptions = useMemo(() => {
+        const values = new Set();
+        selectedModrinthVersions.forEach((version) => {
+            if (Array.isArray(version.game_versions)) {
+                version.game_versions.forEach((item) => values.add(item));
+            }
+        });
+        return Array.from(values).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    }, [selectedModrinthVersions]);
+    const modrinthVersionLoaderOptions = useMemo(() => {
+        const values = new Set();
+        selectedModrinthVersions.forEach((version) => {
+            if (Array.isArray(version.loaders)) {
+                version.loaders.forEach((item) => values.add(item));
+            }
+        });
+        return Array.from(values).sort((a, b) => a.localeCompare(b));
+    }, [selectedModrinthVersions]);
+    const filteredModrinthVersions = useMemo(() => {
+        return selectedModrinthVersions.filter((version) => {
+            const matchesGame = !modrinthVersionGameFilter || version.game_versions?.includes(modrinthVersionGameFilter);
+            const matchesLoader = !modrinthVersionLoaderFilter || version.loaders?.includes(modrinthVersionLoaderFilter);
+            const matchesRelease = !modrinthVersionReleaseFilter || version.version_type === modrinthVersionReleaseFilter;
+            return matchesGame && matchesLoader && matchesRelease;
+        });
+    }, [selectedModrinthVersions, modrinthVersionGameFilter, modrinthVersionLoaderFilter, modrinthVersionReleaseFilter]);
+    const selectedModrinthVersion = useMemo(() => selectedModrinthVersions.find((version) => version.id === selectedModrinthVersionId) || filteredModrinthVersions[0] || null, [selectedModrinthVersions, filteredModrinthVersions, selectedModrinthVersionId]);
+    const selectedModrinthProjectImages = useMemo(() => getProjectGalleryImages(selectedModrinthProject), [selectedModrinthProject]);
+    const selectedModrinthImage = selectedModrinthProjectImages[selectedModrinthImageIndex] || selectedModrinthProjectImages[0] || null;
     const latestRelease = useMemo(() => versions.find((version) => version.type === 'release') || null, [versions]);
     const dashboardNewsItems = newsItems;
     const launchCandidate = activeProfile || profiles[0] || null;
@@ -944,6 +1095,74 @@ function App() {
             setModrinthLoading(false);
         }
     }
+    function pickPreferredModrinthVersion(versionList, gameVersion = '', loader = '', releaseType = '') {
+        return versionList.find((version) => {
+            const matchesGame = !gameVersion || version.game_versions?.includes(gameVersion);
+            const matchesLoader = !loader || version.loaders?.includes(loader);
+            const matchesRelease = !releaseType || version.version_type === releaseType;
+            return matchesGame && matchesLoader && matchesRelease;
+        }) || versionList[0] || null;
+    }
+    async function openModrinthProject(item, refresh = true) {
+        const projectId = getModrinthProjectId(item);
+        if (!projectId)
+            return;
+        const sameProject = modrinthBrowserView === 'project' && getModrinthProjectId(selectedModrinthProject) === projectId;
+        setModrinthBrowserView('project');
+        setSelectedModrinthProject(item);
+        setSelectedModrinthVersions([]);
+        setSelectedModrinthVersionId('');
+        if (!sameProject) {
+            setModrinthProjectTab('versions');
+            setSelectedModrinthImageIndex(0);
+        }
+        setModrinthDetailLoading(true);
+        setStatus('Загрузка проекта Modrinth...');
+        try {
+            const [project, rawVersions] = await Promise.all([
+                window.launcher.getModrinthProject(projectId, { refresh }),
+                window.launcher.getModrinthVersions(projectId, { refresh })
+            ]);
+            const versionList = Array.isArray(rawVersions)
+                ? [...rawVersions].sort((a, b) => new Date(b.date_published || 0).getTime() - new Date(a.date_published || 0).getTime())
+                : [];
+            const projectType = project?.project_type || item?.project_type || modrinthSearchType;
+            const targetGame = projectType !== 'modpack' && selectedModpackProfile
+                ? selectedModpackProfile.versionId
+                : effectiveModrinthVersion;
+            const targetLoader = projectType === 'mod' && selectedModpackProfile
+                ? (selectedModpackProfile.loader === 'vanilla' ? '' : selectedModpackProfile.loader)
+                : effectiveModrinthLoader;
+            const safeGameFilter = targetGame && versionList.some((version) => version.game_versions?.includes(targetGame)) ? targetGame : '';
+            const safeLoaderFilter = targetLoader && versionList.some((version) => version.loaders?.includes(targetLoader)) ? targetLoader : '';
+            const preferred = pickPreferredModrinthVersion(versionList, safeGameFilter, safeLoaderFilter);
+            setSelectedModrinthProject(project);
+            setSelectedModrinthVersions(versionList);
+            setModrinthVersionGameFilter(safeGameFilter);
+            setModrinthVersionLoaderFilter(safeLoaderFilter);
+            setModrinthVersionReleaseFilter('');
+            setSelectedModrinthVersionId(preferred?.id || '');
+            setStatus(`Открыт проект: ${project?.title || item?.title || projectId}`);
+        }
+        catch (error) {
+            console.error('Modrinth project load error', error);
+            setStatus(`Ошибка загрузки проекта Modrinth: ${error?.message || 'проверьте соединение'}`);
+        }
+        finally {
+            setModrinthDetailLoading(false);
+        }
+    }
+    function closeModrinthProject() {
+        setModrinthBrowserView('search');
+        setSelectedModrinthProject(null);
+        setSelectedModrinthVersions([]);
+        setSelectedModrinthVersionId('');
+        setModrinthProjectTab('versions');
+        setSelectedModrinthImageIndex(0);
+        setModrinthVersionGameFilter('');
+        setModrinthVersionLoaderFilter('');
+        setModrinthVersionReleaseFilter('');
+    }
     async function createCustomModpack() {
         if (!modpackCreateForm.name.trim()) {
             showAlert('Введите название модпака');
@@ -1025,12 +1244,89 @@ function App() {
             setIsBusy(false);
         }
     }
+    async function installSelectedModrinthVersion() {
+        if (!selectedModrinthProject || !selectedModrinthVersion) {
+            showAlert('Выберите версию для установки');
+            return;
+        }
+        const projectId = getModrinthProjectId(selectedModrinthProject);
+        const projectType = selectedModrinthProject.project_type || 'mod';
+        if (!projectId)
+            return;
+        if (projectType !== 'modpack' && !selectedModpackProfile) {
+            showAlert('Выберите модпак, куда установить мод, ресурспак или шейдер');
+            return;
+        }
+        setIsBusy(true);
+        setStatus(`Установка ${selectedModrinthVersion.version_number || selectedModrinthVersion.name}...`);
+        try {
+            const installOptions = projectType === 'modpack'
+                ? {
+                    versionId: selectedModrinthVersion.id,
+                    gameVersion: modrinthVersionGameFilter || selectedModrinthVersion.game_versions?.[0],
+                    loader: modrinthVersionLoaderFilter || selectedModrinthVersion.loaders?.[0]
+                }
+                : {
+                    versionId: selectedModrinthVersion.id,
+                    targetProfileId: selectedModpackProfile?.id,
+                    gameVersion: selectedModpackProfile?.versionId,
+                    loader: projectType === 'mod' && selectedModpackProfile?.loader !== 'vanilla' ? selectedModpackProfile?.loader : undefined
+                };
+            const result = await window.launcher.installModrinthProject(projectId, installOptions);
+            if (result?.profile) {
+                setStatus(`Модпак установлен. Профиль "${result.profile.name}" создан.`);
+                await loadState();
+                setSelectedModpackTarget(result.profile.id);
+                setStandaloneExpanded(false);
+                setExpandedModpacks(new Set([getProfileModpackKey(result.profile)]));
+            }
+            else {
+                setStatus(`Установлено: ${selectedModrinthProject.title || projectId} ${selectedModrinthVersion.version_number || ''}`);
+            }
+            await loadInstalledAddons();
+        }
+        catch (error) {
+            console.error('Modrinth version install error', error);
+            setStatus(`Ошибка установки версии Modrinth: ${error?.message || 'проверьте лог'}`);
+        }
+        finally {
+            setIsBusy(false);
+        }
+    }
     useEffect(() => {
         if (activeTab === 'Mods') {
             searchModrinth(1);
             loadInstalledAddons();
         }
     }, [activeTab, modrinthSearchType, effectiveModrinthLoader, effectiveModrinthVersion]);
+    useEffect(() => {
+        if (modrinthBrowserView !== 'project')
+            return;
+        if (filteredModrinthVersions.length === 0) {
+            setSelectedModrinthVersionId('');
+            return;
+        }
+        if (!filteredModrinthVersions.some((version) => version.id === selectedModrinthVersionId)) {
+            setSelectedModrinthVersionId(filteredModrinthVersions[0].id);
+        }
+    }, [modrinthBrowserView, filteredModrinthVersions, selectedModrinthVersionId]);
+    useEffect(() => {
+        if (selectedModrinthImageIndex >= selectedModrinthProjectImages.length && selectedModrinthImageIndex !== 0) {
+            setSelectedModrinthImageIndex(0);
+        }
+    }, [selectedModrinthProjectImages.length, selectedModrinthImageIndex]);
+    useEffect(() => {
+        if (modrinthBrowserView !== 'project' || !selectedModrinthProject || selectedModrinthProject.project_type === 'modpack' || !selectedModpackProfile)
+            return;
+        const nextGameFilter = selectedModpackProfile.versionId && modrinthVersionGameOptions.includes(selectedModpackProfile.versionId)
+            ? selectedModpackProfile.versionId
+            : '';
+        const nextLoaderFilter = selectedModrinthProject.project_type === 'mod' && selectedModpackProfile.loader !== 'vanilla' && modrinthVersionLoaderOptions.includes(selectedModpackProfile.loader)
+            ? selectedModpackProfile.loader
+            : '';
+        setModrinthVersionGameFilter(nextGameFilter);
+        setModrinthVersionLoaderFilter(nextLoaderFilter);
+    }, [modrinthBrowserView, selectedModrinthProject, selectedModpackProfile, modrinthVersionGameOptions, modrinthVersionLoaderOptions]);
     async function loadInstalledAddons() {
         try {
             const addons = await window.launcher.getInstalledModrinthAddons();
@@ -1410,18 +1706,31 @@ function App() {
                                                                                                 model: skinModel
                                                                                             };
                                                                                             const updatedProfile = { ...prof, skin: updatedSkin };
-                                                                                            if (skinDataUrl) {
-                                                                                                const res = await window.launcher.saveSkin(selectedProfile, skinDataUrl);
-                                                                                                if (!res || !res.ok) {
-                                                                                                    showAlert('Не удалось сохранить скин');
-                                                                                                    return;
-                                                                                                }
+                                                                                            const res = await window.launcher.saveSkin(selectedProfile, skinDataUrl, {
+                                                                                                model: skinModel,
+                                                                                                username: launcherProfileName
+                                                                                            });
+                                                                                            if (!res || !res.ok) {
+                                                                                                showAlert('Не удалось сохранить скин');
+                                                                                                return;
+                                                                                            }
+                                                                                            if (res.url) {
                                                                                                 updatedProfile.skin.url = res.url;
                                                                                             }
                                                                                             await window.launcher.saveProfile(updatedProfile);
                                                                                             await loadState();
                                                                                             setProfileSkinUrl(updatedProfile.skin.url || defaultSteveSkinUrl);
                                                                                             setSkinFile(null);
+                                                                                            setSkinDataUrl(null);
+                                                                                            if (res.customSkinLoader?.ok === false) {
+                                                                                                showAlert(`Скин сохранён, но CustomSkinLoader не подключился: ${res.customSkinLoader.error || 'проверьте соединение'}`);
+                                                                                            }
+                                                                                            else if (res.customSkinLoader?.mod?.reason === 'vanilla') {
+                                                                                                setStatus('Скин сохранён. CustomSkinLoader подключается для профилей Forge/Fabric/Quilt/NeoForge.');
+                                                                                            }
+                                                                                            else {
+                                                                                                setStatus('Скин сохранён и подключён через CustomSkinLoader');
+                                                                                            }
                                                                                         }
                                                                                         catch (e) {
                                                                                             console.error(e);
@@ -1433,7 +1742,7 @@ function App() {
                                                                                     }, children: skinUploading ? 'Сохранение...' : 'Сохранить скин' }), _jsx("button", { className: "btn btn-secondary", onClick: () => {
                                                                                         setSkinFile(null);
                                                                                         setSkinDataUrl(null);
-                                                                                    }, children: "\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C" })] }), _jsxs("div", { className: "hint", children: ["\u0418\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 64\u00D764 PNG-\u0441\u043A\u0438\u043D\u044B. \u041F\u043E\u0432\u0435\u0440\u043D\u0438\u0442\u0435 \u043C\u043E\u0434\u0435\u043B\u044C \u043C\u044B\u0448\u044C\u044E \u0432 \u043E\u043A\u043D\u0435 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0430. \u0415\u0441\u043B\u0438 3D \u043D\u0435 \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442, \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u0435 \u0437\u0430\u0432\u0438\u0441\u0438\u043C\u043E\u0441\u0442\u044C ", _jsx("code", { children: "skinview3d" }), "."] })] })] })] })] })] }) })), activeTab === 'Dashboard' && (_jsxs("section", { className: "dashboard-grid dashboard-modern", children: [_jsxs("div", { className: "dashboard-main-column", children: [_jsxs(motion.section, { className: "hero-card hero-carousel-card", initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.45 }, children: [_jsx(AnimatePresence, { initial: false, children: _jsx(motion.div, { className: "hero-slide-bg", style: { '--hero-image': `url(${activeHeroSlide.image})` }, initial: { opacity: 0, scale: 1.045, x: 18 }, animate: { opacity: 1, scale: 1, x: 0 }, exit: { opacity: 0, scale: 1.025, x: -16 }, transition: { duration: 0.85, ease: [0.22, 1, 0.36, 1] }, "aria-hidden": "true" }, `${activeHeroSlide.id}-background`) }), _jsx("button", { type: "button", className: "hero-nav hero-nav-prev", onClick: () => changeHeroSlide((index) => index - 1), "aria-label": "\u041F\u0440\u0435\u0434\u044B\u0434\u0443\u0449\u0430\u044F \u043D\u043E\u0432\u043E\u0441\u0442\u044C", title: "\u041F\u0440\u0435\u0434\u044B\u0434\u0443\u0449\u0430\u044F \u043D\u043E\u0432\u043E\u0441\u0442\u044C", children: _jsx(Icon, { name: "chevron" }) }), _jsx("button", { type: "button", className: "hero-nav hero-nav-next", onClick: () => changeHeroSlide((index) => index + 1), "aria-label": "\u0421\u043B\u0435\u0434\u0443\u044E\u0449\u0430\u044F \u043D\u043E\u0432\u043E\u0441\u0442\u044C", title: "\u0421\u043B\u0435\u0434\u0443\u044E\u0449\u0430\u044F \u043D\u043E\u0432\u043E\u0441\u0442\u044C", children: _jsx(Icon, { name: "chevron" }) }), _jsx(AnimatePresence, { mode: "wait", initial: false, children: _jsxs(motion.div, { className: "hero-copy", initial: { opacity: 0, x: 24, filter: 'blur(8px)' }, animate: { opacity: 1, x: 0, filter: 'blur(0px)' }, exit: { opacity: 0, x: -18, filter: 'blur(8px)' }, transition: { duration: 0.46, ease: [0.22, 1, 0.36, 1] }, children: [_jsx("span", { className: "hero-kicker", children: activeHeroSlide.kicker }), _jsx("h1", { children: activeHeroSlide.title }), _jsx("p", { children: activeHeroSlide.body }), _jsx("div", { className: "hero-meta-row", children: activeHeroSlide.meta.map((item) => (_jsx("span", { children: item }, item))) }), _jsx("div", { className: "hero-actions", children: activeHeroSlide.actions.map((action) => (_jsxs("button", { className: `btn btn-${action.variant}`, disabled: action.disabled, onClick: action.onClick, children: [_jsx(Icon, { name: action.icon }), action.label] }, action.id))) })] }, activeHeroSlide.id) }), _jsx("div", { className: "hero-progress", "aria-hidden": "true", children: _jsx("span", {}) }, `${activeHeroSlide.id}-${heroAutoplayResetKey}`), _jsxs("div", { className: "hero-dots", "aria-label": "\u041D\u043E\u0432\u043E\u0441\u0442\u0438 \u043D\u0430 \u0433\u043B\u0430\u0432\u043D\u043E\u043C \u044D\u043A\u0440\u0430\u043D\u0435", style: { '--dot-offset': `${activeHeroIndex * 38}px` }, children: [_jsx("span", { className: "hero-dot-glider", "aria-hidden": "true" }), heroSlides.map((slide, index) => (_jsx("button", { type: "button", className: index === activeHeroIndex ? 'active' : '', onClick: () => changeHeroSlide(index), "aria-label": `Открыть новость: ${slide.title}`, "aria-current": index === activeHeroIndex ? 'true' : undefined }, slide.id)))] })] }), _jsxs("div", { className: "section-heading", children: [_jsxs("div", { children: [_jsx("span", { className: "section-marker" }), _jsx("h2", { children: "\u041D\u043E\u0432\u043E\u0441\u0442\u0438 \u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u044F" })] }), _jsx("button", { className: "icon-button", onClick: loadMeta, title: "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u0432\u0435\u0440\u0441\u0438\u0438", children: _jsx(Icon, { name: "refresh" }) })] }), _jsx("div", { className: "news-grid", children: dashboardNewsItems.map((item, index) => (_jsxs(motion.article, { className: `news-card rich-news-card news-card-${index + 1}`, style: { '--news-image': `url(${item.image})` }, initial: { opacity: 0, y: 18 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.45, delay: index * 0.08 }, children: [_jsxs("div", { className: "news-media", children: [_jsx(Icon, { name: item.icon }), _jsx("span", { children: item.tag })] }), _jsxs("div", { className: "news-content", children: [_jsx("h3", { children: item.title }), _jsx("p", { children: item.body }), _jsx("span", { children: item.date })] })] }, item.title))) }), _jsx("div", { className: "section-heading quick-heading", children: _jsxs("div", { children: [_jsx("span", { className: "section-marker" }), _jsx("h2", { children: "\u0411\u044B\u0441\u0442\u0440\u044B\u0439 \u0434\u043E\u0441\u0442\u0443\u043F" })] }) }), _jsxs("div", { className: "quick-grid", children: [_jsxs("button", { className: "quick-card", onClick: () => setActiveTab('Profiles'), children: [_jsx("span", { className: "quick-icon red", children: _jsx(Icon, { name: "folder" }) }), _jsxs("span", { children: [_jsx("strong", { children: "\u041B\u043E\u043A\u0430\u043B\u044C\u043D\u044B\u0435 \u043F\u0440\u043E\u0444\u0438\u043B\u0438" }), _jsx("small", { children: "\u0411\u044B\u0441\u0442\u0440\u0430\u044F \u0437\u0430\u0433\u0440\u0443\u0437\u043A\u0430 \u043F\u0440\u043E\u0444\u0438\u043B\u0435\u0439" })] })] }), _jsxs("button", { className: "quick-card", onClick: () => setActiveTab('Mods'), children: [_jsx("span", { className: "quick-icon dark-red", children: _jsx(Icon, { name: "mods" }) }), _jsxs("span", { children: [_jsx("strong", { children: "\u041C\u043E\u0434\u044B" }), _jsx("small", { children: "\u041C\u043E\u0434\u043F\u0430\u043A\u0438, \u0440\u0435\u0441\u0443\u0440\u0441\u044B \u0438 \u0448\u0435\u0439\u0434\u0435\u0440\u044B" })] })] }), _jsxs("button", { className: "quick-card", onClick: () => setActiveTab('Skins'), children: [_jsx("span", { className: "quick-icon wine", children: _jsx(Icon, { name: "shirt" }) }), _jsxs("span", { children: [_jsx("strong", { children: "\u0421\u043A\u0438\u043D\u044B" }), _jsx("small", { children: "\u0411\u0438\u0431\u043B\u0438\u043E\u0442\u0435\u043A\u0430 \u0441\u043A\u0438\u043D\u043E\u0432 \u0438 \u043F\u043B\u0430\u0449\u0435\u0439" })] })] }), _jsxs("button", { className: "quick-card", onClick: () => setActiveTab('Settings'), children: [_jsx("span", { className: "quick-icon ember", children: _jsx(Icon, { name: "settings" }) }), _jsxs("span", { children: [_jsx("strong", { children: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438" }), _jsx("small", { children: "Java, RAM \u0438 \u0437\u0430\u043F\u0443\u0441\u043A" })] })] })] })] }), _jsxs("aside", { className: "dashboard-side-column", children: [_jsxs("section", { className: "side-widget profile-widget", children: [_jsxs("div", { className: "widget-title-row", children: [_jsx("span", { className: "section-marker" }), _jsx("h2", { children: "\u0412\u0430\u0448 \u043F\u0440\u043E\u0444\u0438\u043B\u044C" }), _jsx("button", { className: "icon-button", onClick: () => setActiveTab('Settings'), title: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438", children: _jsx(Icon, { name: "settings" }) })] }), _jsxs("div", { className: "profile-widget-body", children: [_jsx("button", { className: `user-avatar big-avatar ${launcherAvatar ? 'has-image' : ''}`, onClick: () => setActiveTab('Settings'), "aria-label": "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u043F\u0440\u043E\u0444\u0438\u043B\u044F", children: launcherAvatar ? _jsx("img", { src: launcherAvatar, alt: "" }) : userInitials }), _jsxs("div", { children: [_jsx("div", { className: "user-name", children: launcherProfileName }), _jsx("div", { className: "user-email", children: launcherProfileSubtitle })] })] }), _jsxs("button", { className: "outline-button sidebar-wide-button", onClick: () => setActiveTab(auth.loggedIn ? 'Profiles' : 'Settings'), children: [_jsx(Icon, { name: auth.loggedIn ? 'profiles' : 'user' }), auth.loggedIn ? 'Мои профили' : 'Войти в аккаунт'] })] }), _jsxs("section", { className: "side-widget friends-widget", children: [_jsxs("div", { className: "widget-title-row", children: [_jsx("h2", { children: "\u0414\u0440\u0443\u0437\u044C\u044F" }), _jsx("span", { className: "online-label", children: "0 \u043E\u043D\u043B\u0430\u0439\u043D" })] }), _jsxs("div", { className: "empty-friends", children: [_jsx(Icon, { name: "friends" }), _jsx("p", { children: "\u0412\u043E\u0439\u0434\u0438\u0442\u0435, \u0447\u0442\u043E\u0431\u044B \u0432\u0438\u0434\u0435\u0442\u044C \u0441\u0442\u0430\u0442\u0443\u0441 \u0434\u0440\u0443\u0437\u0435\u0439 \u0438 \u0438\u0433\u0440\u0430\u0442\u044C \u0432\u043C\u0435\u0441\u0442\u0435." })] })] }), _jsxs("section", { className: "side-widget stats-widget", children: [_jsx("div", { className: "widget-title-row", children: _jsx("h2", { children: "\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430" }) }), _jsxs("div", { className: "stats-grid compact-stats", children: [_jsxs("div", { className: "stat-card", children: [_jsxs("div", { className: "stat-header", children: [_jsx("span", { className: "stat-label", children: "\u0412\u0435\u0440\u0441\u0438\u0439 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043E" }), _jsx("span", { className: "stat-value", children: installed.length })] }), _jsx("div", { className: "stat-bar", children: _jsx(motion.div, { className: "stat-bar-fill", initial: { width: 0 }, animate: { width: `${Math.min(100, installed.length * 10)}%` }, transition: { duration: 1, delay: 0.2 } }) })] }), _jsxs("div", { className: "stat-card", children: [_jsxs("div", { className: "stat-header", children: [_jsx("span", { className: "stat-label", children: "\u041F\u0440\u043E\u0444\u0438\u043B\u0435\u0439" }), _jsx("span", { className: "stat-value", children: profiles.length })] }), _jsx("div", { className: "stat-bar", children: _jsx(motion.div, { className: "stat-bar-fill", initial: { width: 0 }, animate: { width: `${Math.min(100, profiles.length * 20)}%` }, transition: { duration: 1, delay: 0.4 } }) })] }), _jsxs("div", { className: "stat-card", children: [_jsxs("div", { className: "stat-header", children: [_jsx("span", { className: "stat-label", children: "RAM \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043E" }), _jsx("span", { className: "stat-value", children: ramLabel })] }), _jsx("div", { className: "stat-bar", children: _jsx(motion.div, { className: "stat-bar-fill", initial: { width: 0 }, animate: { width: ramBarWidth }, transition: { duration: 1, delay: 0.6 } }) })] })] })] }), _jsx("div", { className: "social-row", children: socialLinks.map((link) => (_jsx("a", { className: "social-button", href: link.url, target: "_blank", rel: "noreferrer", title: link.title, "aria-label": link.title, onClick: (event) => openExternalLink(event, link.url), children: _jsx(Icon, { name: link.icon }) }, link.id))) }), _jsxs("div", { className: "launcher-footnote", children: ["KuroLauncher ", APP_VERSION, " \u2022 2026"] })] })] })), activeTab === 'Versions' && (_jsxs("section", { className: "versions-grid scrollable-content", children: [_jsxs("div", { className: "panel panel large", children: [_jsxs("div", { className: "panel-title", children: ["\u0414\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0435 \u0432\u0435\u0440\u0441\u0438\u0438 (", filteredVersions.length, ")"] }), _jsxs("div", { className: "version-filters", children: [_jsxs("div", { className: "filter-group", children: [_jsx("label", { children: "\u041F\u043E\u0438\u0441\u043A \u0432\u0435\u0440\u0441\u0438\u0438:" }), _jsx("input", { type: "text", placeholder: "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 ID \u0432\u0435\u0440\u0441\u0438\u0438...", value: versionSearch, onChange: (e) => setVersionSearch(e.target.value), className: "search-input" })] }), _jsxs("div", { className: "filter-group", children: [_jsx("label", { children: "\u0422\u0438\u043F \u0432\u0435\u0440\u0441\u0438\u0438:" }), _jsx("div", { className: "filter-buttons", children: [
+                                                                                    }, children: "\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C" })] }), _jsx("div", { className: "hint", children: "\u0421\u043A\u0438\u043D\u044B \u043F\u0440\u0438\u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F \u0432 \u0438\u0433\u0440\u0435 \u0447\u0435\u0440\u0435\u0437 CustomSkinLoader. \u0414\u043B\u044F \u0440\u0430\u0431\u043E\u0442\u044B \u043D\u0443\u0436\u0435\u043D \u043F\u0440\u043E\u0444\u0438\u043B\u044C \u0441 \u043C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440\u043E\u043C: Forge, Fabric, Quilt \u0438\u043B\u0438 NeoForge; \u043D\u0430 Vanilla \u0441\u043A\u0438\u043D \u043E\u0441\u0442\u0430\u043D\u0435\u0442\u0441\u044F \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043F\u0440\u0435\u0434\u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435." })] })] })] })] })] }) })), activeTab === 'Dashboard' && (_jsxs("section", { className: "dashboard-grid dashboard-modern", children: [_jsxs("div", { className: "dashboard-main-column", children: [_jsxs(motion.section, { className: "hero-card hero-carousel-card", initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.45 }, children: [_jsx(AnimatePresence, { initial: false, children: _jsx(motion.div, { className: "hero-slide-bg", style: { '--hero-image': `url(${activeHeroSlide.image})` }, initial: { opacity: 0, scale: 1.045, x: 18 }, animate: { opacity: 1, scale: 1, x: 0 }, exit: { opacity: 0, scale: 1.025, x: -16 }, transition: { duration: 0.85, ease: [0.22, 1, 0.36, 1] }, "aria-hidden": "true" }, `${activeHeroSlide.id}-background`) }), _jsx("button", { type: "button", className: "hero-nav hero-nav-prev", onClick: () => changeHeroSlide((index) => index - 1), "aria-label": "\u041F\u0440\u0435\u0434\u044B\u0434\u0443\u0449\u0430\u044F \u043D\u043E\u0432\u043E\u0441\u0442\u044C", title: "\u041F\u0440\u0435\u0434\u044B\u0434\u0443\u0449\u0430\u044F \u043D\u043E\u0432\u043E\u0441\u0442\u044C", children: _jsx(Icon, { name: "chevron" }) }), _jsx("button", { type: "button", className: "hero-nav hero-nav-next", onClick: () => changeHeroSlide((index) => index + 1), "aria-label": "\u0421\u043B\u0435\u0434\u0443\u044E\u0449\u0430\u044F \u043D\u043E\u0432\u043E\u0441\u0442\u044C", title: "\u0421\u043B\u0435\u0434\u0443\u044E\u0449\u0430\u044F \u043D\u043E\u0432\u043E\u0441\u0442\u044C", children: _jsx(Icon, { name: "chevron" }) }), _jsx(AnimatePresence, { mode: "wait", initial: false, children: _jsxs(motion.div, { className: "hero-copy", initial: { opacity: 0, x: 24, filter: 'blur(8px)' }, animate: { opacity: 1, x: 0, filter: 'blur(0px)' }, exit: { opacity: 0, x: -18, filter: 'blur(8px)' }, transition: { duration: 0.46, ease: [0.22, 1, 0.36, 1] }, children: [_jsx("span", { className: "hero-kicker", children: activeHeroSlide.kicker }), _jsx("h1", { children: activeHeroSlide.title }), _jsx("p", { children: activeHeroSlide.body }), _jsx("div", { className: "hero-meta-row", children: activeHeroSlide.meta.map((item) => (_jsx("span", { children: item }, item))) }), _jsx("div", { className: "hero-actions", children: activeHeroSlide.actions.map((action) => (_jsxs("button", { className: `btn btn-${action.variant}`, disabled: action.disabled, onClick: action.onClick, children: [_jsx(Icon, { name: action.icon }), action.label] }, action.id))) })] }, activeHeroSlide.id) }), _jsx("div", { className: "hero-progress", "aria-hidden": "true", children: _jsx("span", {}) }, `${activeHeroSlide.id}-${heroAutoplayResetKey}`), _jsxs("div", { className: "hero-dots", "aria-label": "\u041D\u043E\u0432\u043E\u0441\u0442\u0438 \u043D\u0430 \u0433\u043B\u0430\u0432\u043D\u043E\u043C \u044D\u043A\u0440\u0430\u043D\u0435", style: { '--dot-offset': `${activeHeroIndex * 38}px` }, children: [_jsx("span", { className: "hero-dot-glider", "aria-hidden": "true" }), heroSlides.map((slide, index) => (_jsx("button", { type: "button", className: index === activeHeroIndex ? 'active' : '', onClick: () => changeHeroSlide(index), "aria-label": `Открыть новость: ${slide.title}`, "aria-current": index === activeHeroIndex ? 'true' : undefined }, slide.id)))] })] }), _jsxs("div", { className: "section-heading", children: [_jsxs("div", { children: [_jsx("span", { className: "section-marker" }), _jsx("h2", { children: "\u041D\u043E\u0432\u043E\u0441\u0442\u0438 \u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u044F" })] }), _jsx("button", { className: "icon-button", onClick: loadMeta, title: "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u0432\u0435\u0440\u0441\u0438\u0438", children: _jsx(Icon, { name: "refresh" }) })] }), _jsx("div", { className: "news-grid", children: dashboardNewsItems.map((item, index) => (_jsxs(motion.article, { className: `news-card rich-news-card news-card-${index + 1}`, style: { '--news-image': `url(${item.image})` }, initial: { opacity: 0, y: 18 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.45, delay: index * 0.08 }, children: [_jsxs("div", { className: "news-media", children: [_jsx(Icon, { name: item.icon }), _jsx("span", { children: item.tag })] }), _jsxs("div", { className: "news-content", children: [_jsx("h3", { children: item.title }), _jsx("p", { children: item.body }), _jsx("span", { children: item.date })] })] }, item.title))) }), _jsx("div", { className: "section-heading quick-heading", children: _jsxs("div", { children: [_jsx("span", { className: "section-marker" }), _jsx("h2", { children: "\u0411\u044B\u0441\u0442\u0440\u044B\u0439 \u0434\u043E\u0441\u0442\u0443\u043F" })] }) }), _jsxs("div", { className: "quick-grid", children: [_jsxs("button", { className: "quick-card", onClick: () => setActiveTab('Profiles'), children: [_jsx("span", { className: "quick-icon red", children: _jsx(Icon, { name: "folder" }) }), _jsxs("span", { children: [_jsx("strong", { children: "\u041B\u043E\u043A\u0430\u043B\u044C\u043D\u044B\u0435 \u043F\u0440\u043E\u0444\u0438\u043B\u0438" }), _jsx("small", { children: "\u0411\u044B\u0441\u0442\u0440\u0430\u044F \u0437\u0430\u0433\u0440\u0443\u0437\u043A\u0430 \u043F\u0440\u043E\u0444\u0438\u043B\u0435\u0439" })] })] }), _jsxs("button", { className: "quick-card", onClick: () => setActiveTab('Mods'), children: [_jsx("span", { className: "quick-icon dark-red", children: _jsx(Icon, { name: "mods" }) }), _jsxs("span", { children: [_jsx("strong", { children: "\u041C\u043E\u0434\u044B" }), _jsx("small", { children: "\u041C\u043E\u0434\u043F\u0430\u043A\u0438, \u0440\u0435\u0441\u0443\u0440\u0441\u044B \u0438 \u0448\u0435\u0439\u0434\u0435\u0440\u044B" })] })] }), _jsxs("button", { className: "quick-card", onClick: () => setActiveTab('Skins'), children: [_jsx("span", { className: "quick-icon wine", children: _jsx(Icon, { name: "shirt" }) }), _jsxs("span", { children: [_jsx("strong", { children: "\u0421\u043A\u0438\u043D\u044B" }), _jsx("small", { children: "\u0411\u0438\u0431\u043B\u0438\u043E\u0442\u0435\u043A\u0430 \u0441\u043A\u0438\u043D\u043E\u0432 \u0438 \u043F\u043B\u0430\u0449\u0435\u0439" })] })] }), _jsxs("button", { className: "quick-card", onClick: () => setActiveTab('Settings'), children: [_jsx("span", { className: "quick-icon ember", children: _jsx(Icon, { name: "settings" }) }), _jsxs("span", { children: [_jsx("strong", { children: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438" }), _jsx("small", { children: "Java, RAM \u0438 \u0437\u0430\u043F\u0443\u0441\u043A" })] })] })] })] }), _jsxs("aside", { className: "dashboard-side-column", children: [_jsxs("section", { className: "side-widget profile-widget", children: [_jsxs("div", { className: "widget-title-row", children: [_jsx("span", { className: "section-marker" }), _jsx("h2", { children: "\u0412\u0430\u0448 \u043F\u0440\u043E\u0444\u0438\u043B\u044C" }), _jsx("button", { className: "icon-button", onClick: () => setActiveTab('Settings'), title: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438", children: _jsx(Icon, { name: "settings" }) })] }), _jsxs("div", { className: "profile-widget-body", children: [_jsx("button", { className: `user-avatar big-avatar ${launcherAvatar ? 'has-image' : ''}`, onClick: () => setActiveTab('Settings'), "aria-label": "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u043F\u0440\u043E\u0444\u0438\u043B\u044F", children: launcherAvatar ? _jsx("img", { src: launcherAvatar, alt: "" }) : userInitials }), _jsxs("div", { children: [_jsx("div", { className: "user-name", children: launcherProfileName }), _jsx("div", { className: "user-email", children: launcherProfileSubtitle })] })] }), _jsxs("button", { className: "outline-button sidebar-wide-button", onClick: () => setActiveTab(auth.loggedIn ? 'Profiles' : 'Settings'), children: [_jsx(Icon, { name: auth.loggedIn ? 'profiles' : 'user' }), auth.loggedIn ? 'Мои профили' : 'Войти в аккаунт'] })] }), _jsxs("section", { className: "side-widget friends-widget", children: [_jsxs("div", { className: "widget-title-row", children: [_jsx("h2", { children: "\u0414\u0440\u0443\u0437\u044C\u044F" }), _jsx("span", { className: "online-label", children: "0 \u043E\u043D\u043B\u0430\u0439\u043D" })] }), _jsxs("div", { className: "empty-friends", children: [_jsx(Icon, { name: "friends" }), _jsx("p", { children: "\u0412\u043E\u0439\u0434\u0438\u0442\u0435, \u0447\u0442\u043E\u0431\u044B \u0432\u0438\u0434\u0435\u0442\u044C \u0441\u0442\u0430\u0442\u0443\u0441 \u0434\u0440\u0443\u0437\u0435\u0439 \u0438 \u0438\u0433\u0440\u0430\u0442\u044C \u0432\u043C\u0435\u0441\u0442\u0435." })] })] }), _jsxs("section", { className: "side-widget stats-widget", children: [_jsx("div", { className: "widget-title-row", children: _jsx("h2", { children: "\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430" }) }), _jsxs("div", { className: "stats-grid compact-stats", children: [_jsxs("div", { className: "stat-card", children: [_jsxs("div", { className: "stat-header", children: [_jsx("span", { className: "stat-label", children: "\u0412\u0435\u0440\u0441\u0438\u0439 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043E" }), _jsx("span", { className: "stat-value", children: installed.length })] }), _jsx("div", { className: "stat-bar", children: _jsx(motion.div, { className: "stat-bar-fill", initial: { width: 0 }, animate: { width: `${Math.min(100, installed.length * 10)}%` }, transition: { duration: 1, delay: 0.2 } }) })] }), _jsxs("div", { className: "stat-card", children: [_jsxs("div", { className: "stat-header", children: [_jsx("span", { className: "stat-label", children: "\u041F\u0440\u043E\u0444\u0438\u043B\u0435\u0439" }), _jsx("span", { className: "stat-value", children: profiles.length })] }), _jsx("div", { className: "stat-bar", children: _jsx(motion.div, { className: "stat-bar-fill", initial: { width: 0 }, animate: { width: `${Math.min(100, profiles.length * 20)}%` }, transition: { duration: 1, delay: 0.4 } }) })] }), _jsxs("div", { className: "stat-card", children: [_jsxs("div", { className: "stat-header", children: [_jsx("span", { className: "stat-label", children: "RAM \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043E" }), _jsx("span", { className: "stat-value", children: ramLabel })] }), _jsx("div", { className: "stat-bar", children: _jsx(motion.div, { className: "stat-bar-fill", initial: { width: 0 }, animate: { width: ramBarWidth }, transition: { duration: 1, delay: 0.6 } }) })] })] })] }), _jsx("div", { className: "social-row", children: socialLinks.map((link) => (_jsx("a", { className: "social-button", href: link.url, target: "_blank", rel: "noreferrer", title: link.title, "aria-label": link.title, onClick: (event) => openExternalLink(event, link.url), children: _jsx(Icon, { name: link.icon }) }, link.id))) }), _jsxs("div", { className: "launcher-footnote", children: ["KuroLauncher ", APP_VERSION, " \u2022 2026"] })] })] })), activeTab === 'Versions' && (_jsxs("section", { className: "versions-grid scrollable-content", children: [_jsxs("div", { className: "panel panel large", children: [_jsxs("div", { className: "panel-title", children: ["\u0414\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0435 \u0432\u0435\u0440\u0441\u0438\u0438 (", filteredVersions.length, ")"] }), _jsxs("div", { className: "version-filters", children: [_jsxs("div", { className: "filter-group", children: [_jsx("label", { children: "\u041F\u043E\u0438\u0441\u043A \u0432\u0435\u0440\u0441\u0438\u0438:" }), _jsx("input", { type: "text", placeholder: "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 ID \u0432\u0435\u0440\u0441\u0438\u0438...", value: versionSearch, onChange: (e) => setVersionSearch(e.target.value), className: "search-input" })] }), _jsxs("div", { className: "filter-group", children: [_jsx("label", { children: "\u0422\u0438\u043F \u0432\u0435\u0440\u0441\u0438\u0438:" }), _jsx("div", { className: "filter-buttons", children: [
                                                                     { value: 'all', label: 'Все' },
                                                                     { value: 'release', label: 'Релизы' },
                                                                     { value: 'snapshot', label: 'Снапшоты' },
@@ -1449,28 +1758,47 @@ function App() {
                                                                         }, children: "\u041D\u0430\u0441\u0442\u0440\u043E\u0438\u0442\u044C" }), _jsx("button", { className: "btn btn-ghost delete-button", onClick: (e) => {
                                                                             e.stopPropagation();
                                                                             deleteProfile(profile.id);
-                                                                        }, children: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C" })] })] }, profile.id))), profiles.length === 0 && _jsx("div", { className: "hint", children: "\u0421\u043E\u0437\u0434\u0430\u0439\u0442\u0435 \u043F\u0440\u043E\u0444\u0438\u043B\u044C \u0434\u043B\u044F \u0437\u0430\u043F\u0443\u0441\u043A\u0430" })] })] }), _jsx("div", { className: "panel panel large", children: _jsxs("div", { className: `profile-config-panel ${editingProfile ? '' : 'profile-config-panel-muted'}`, children: [_jsxs("div", { className: "profile-panel-header", children: [_jsx("div", { className: "panel-title", children: editingProfile ? `Настройка: ${editingProfile.name}` : 'Новый профиль' }), editingProfile && (_jsx("button", { type: "button", className: "btn btn-ghost", onClick: () => setEditingProfileId(null), children: "\u041D\u0430\u0437\u0430\u0434 \u043A \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u044E" }))] }), editingProfile ? (_jsx(ProfileForm, { onSave: saveProfileSettings, settings: settings, installed: installed, availableLoaderVersions: availableLoaderVersions, loaderVersionLoading: loaderVersionLoading, ramOptions: profileRamOptions, resetTrigger: profileFormResetTrigger, onLoaderVersionChange: (versionId, loader) => fetchLoaderVersions(versionId, loader), showAlert: showAlert, initialProfile: editingProfile, mode: "edit", submitLabel: "\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u043F\u0440\u043E\u0444\u0438\u043B\u044F", onCancel: () => setEditingProfileId(null) }, `edit-${editingProfile.id}`)) : (_jsx(ProfileForm, { onSave: saveNewProfile, settings: settings, installed: installed, availableLoaderVersions: availableLoaderVersions, loaderVersionLoading: loaderVersionLoading, ramOptions: profileRamOptions, resetTrigger: profileFormResetTrigger, onLoaderVersionChange: (versionId, loader) => fetchLoaderVersions(versionId, loader), showAlert: showAlert, mode: "create", submitLabel: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u043F\u0440\u043E\u0444\u0438\u043B\u044C" }))] }) })] })), activeTab === 'Mods' && (_jsxs("section", { className: "modrinth-grid scrollable-content", children: [_jsxs("div", { className: "panel panel large", children: [_jsx("div", { className: "panel-title", children: "\u041C\u043E\u0434\u043F\u0430\u043A\u0438" }), _jsxs("div", { className: "modpack-workbench", children: [_jsxs("div", { className: "modpack-workbench-panel", children: [_jsx("div", { className: "workbench-title", children: "\u0426\u0435\u043B\u044C \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u0438" }), _jsx(CustomSelect, { options: modpackTargetOptions, value: selectedModpackTarget, onChange: (val) => setSelectedModpackTarget(val), placeholder: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u043E\u0434\u043F\u0430\u043A" }), selectedModpackProfile ? (_jsxs("div", { className: "target-summary", children: [_jsx("div", { className: "target-name", children: selectedModpackProfile.name }), _jsxs("div", { className: "target-chip-row", children: [_jsx("span", { className: "target-chip", children: selectedModpackProfile.versionId }), _jsx("span", { className: "target-chip", children: formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion) }), _jsx("span", { className: "target-chip", children: formatProfileRam(selectedModpackProfile, settings) })] })] })) : (_jsx("div", { className: "target-warning", children: "\u041F\u0435\u0440\u0435\u0434 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u043E\u0439 \u043C\u043E\u0434\u043E\u0432, \u0440\u0435\u0441\u0443\u0440\u0441\u043F\u0430\u043A\u043E\u0432 \u0438\u043B\u0438 \u0448\u0435\u0439\u0434\u0435\u0440\u043E\u0432 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u043E\u0434\u043F\u0430\u043A." }))] }), _jsxs("div", { className: "modpack-workbench-panel", children: [_jsx("div", { className: "workbench-title", children: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u0441\u0432\u043E\u0439 \u043C\u043E\u0434\u043F\u0430\u043A" }), _jsxs("div", { className: "modpack-create-grid", children: [_jsxs("label", { children: ["\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435", _jsx("input", { value: modpackCreateForm.name, onChange: (e) => setModpackCreateForm((prev) => ({ ...prev, name: e.target.value })), placeholder: "\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440 Kuro Survival" })] }), _jsxs("label", { children: ["\u0412\u0435\u0440\u0441\u0438\u044F Minecraft", _jsx(CustomSelect, { options: [{ value: '', label: 'Выберите версию' }, ...versionSelectOptions], value: modpackCreateForm.versionId, onChange: (val) => setModpackCreateForm((prev) => ({ ...prev, versionId: val, loaderVersion: '' })), placeholder: "\u0412\u0435\u0440\u0441\u0438\u044F" })] }), _jsxs("label", { children: ["\u041C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440", _jsx(CustomSelect, { options: [
-                                                                                    { value: 'forge', label: 'Forge' },
-                                                                                    { value: 'fabric', label: 'Fabric' },
-                                                                                    { value: 'quilt', label: 'Quilt' },
-                                                                                    { value: 'neoforge', label: 'NeoForge' },
-                                                                                    { value: 'vanilla', label: 'Vanilla' }
-                                                                                ], value: modpackCreateForm.loader, onChange: (val) => setModpackCreateForm((prev) => ({ ...prev, loader: val, loaderVersion: '' })), placeholder: "\u041C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440" })] }), _jsxs("label", { children: ["\u0412\u0435\u0440\u0441\u0438\u044F \u043C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440\u0430", _jsx(CustomSelect, { options: [
-                                                                                    { value: '', label: modpackCreateForm.loader === 'vanilla' ? 'Не требуется' : modpackCreateLoaderLoading ? 'Загрузка...' : 'Выберите версию' },
-                                                                                    ...modpackCreateLoaderVersions
-                                                                                ], value: modpackCreateForm.loaderVersion, onChange: (val) => setModpackCreateForm((prev) => ({ ...prev, loaderVersion: val })), placeholder: "\u0412\u0435\u0440\u0441\u0438\u044F \u043C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440\u0430", disabled: modpackCreateForm.loader === 'vanilla' || modpackCreateLoaderLoading })] }), _jsx("button", { className: "button", onClick: createCustomModpack, disabled: modpackCreateLoading || modpackCreateLoaderLoading, children: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u043C\u043E\u0434\u043F\u0430\u043A" })] })] })] }), _jsx("div", { className: "panel-title", style: { marginTop: 18 }, children: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 Modrinth" }), selectedModpackProfile && isTargetedModrinthType && (_jsxs("div", { className: "modrinth-filter-note", children: ["\u041F\u043E\u0438\u0441\u043A \u0434\u043E\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u0439 \u0438\u0434\u0451\u0442 \u043F\u043E\u0434 \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u044B\u0439 \u043C\u043E\u0434\u043F\u0430\u043A: ", selectedModpackProfile.versionId, " \u2022 ", formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion)] })), _jsxs("div", { className: "form-grid", children: [_jsxs("label", { children: ["\u041F\u043E\u0438\u0441\u043A", _jsx("input", { value: modrinthQuery, onChange: (e) => setModrinthQuery(e.target.value), placeholder: "\u0418\u043C\u044F \u043C\u043E\u0434\u0430, \u0442\u0435\u043A\u0441\u0442 \u0438\u043B\u0438 ID" })] }), _jsxs("label", { children: ["\u0412\u0435\u0440\u0441\u0438\u044F Minecraft", _jsx("input", { value: effectiveModrinthVersion, onChange: (e) => setModrinthSearchVersion(e.target.value), placeholder: "\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440 1.20.1", disabled: Boolean(selectedModpackProfile && isTargetedModrinthType) })] }), _jsxs("label", { children: ["\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A", _jsx(CustomSelect, { options: [
-                                                                    { value: '', label: 'Любой' },
-                                                                    { value: 'fabric', label: 'Fabric' },
-                                                                    { value: 'forge', label: 'Forge' },
-                                                                    { value: 'quilt', label: 'Quilt' },
-                                                                    { value: 'neoforge', label: 'NeoForge' }
-                                                                ], value: effectiveModrinthLoader, onChange: (val) => setModrinthSearchLoader(val), placeholder: "\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A", disabled: Boolean(selectedModpackProfile && isTargetedModrinthType) })] }), _jsxs("label", { children: ["\u0422\u0438\u043F \u043A\u043E\u043D\u0442\u0435\u043D\u0442\u0430", _jsx(CustomSelect, { options: [
-                                                                    { value: 'all', label: 'Все' },
-                                                                    { value: 'mod', label: 'Моды' },
-                                                                    { value: 'modpack', label: 'Модпаки' },
-                                                                    { value: 'resourcepack', label: 'Ресурсы' },
-                                                                    { value: 'shader', label: 'Шейдеры' }
-                                                                ], value: modrinthSearchType, onChange: (val) => setModrinthSearchType(val), placeholder: "\u0422\u0438\u043F" })] }), _jsx("button", { className: "button", onClick: () => searchModrinth(1), disabled: modrinthLoading, children: "\u0418\u0441\u043A\u0430\u0442\u044C" })] }), _jsxs("div", { className: "panel-title", style: { marginTop: 18 }, children: ["\u0420\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u044B \u043F\u043E\u0438\u0441\u043A\u0430 ", modrinthTotalHits ? `(${modrinthTotalHits} найдено)` : ''] }), _jsxs("div", { className: "search-results grid", children: [modrinthLoading && _jsx("div", { className: "hint", children: "\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0430 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u043E\u0432..." }), !modrinthLoading && modrinthSearchResults.length === 0 && _jsx("div", { className: "hint", children: "\u041D\u0435\u0442 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u043E\u0432. \u041F\u043E\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0434\u0440\u0443\u0433\u043E\u0439 \u0437\u0430\u043F\u0440\u043E\u0441 \u0438\u043B\u0438 \u0441\u043C\u0435\u043D\u0438\u0442\u0435 \u0444\u0438\u043B\u044C\u0442\u0440\u044B." }), modrinthSearchResults.map((item) => (_jsxs("article", { className: "search-card modrinth-card", children: [_jsxs("div", { className: "search-card-header", children: [_jsx("img", { src: item.icon_url || '', alt: item.title || item.name, className: "search-card-icon" }), _jsxs("div", { children: [_jsx("div", { className: "search-title", children: item.title || item.name }), _jsxs("div", { className: "search-meta", children: [item.project_type, " \u2022 ", item.primary_category || item.loader_type || 'Без категории'] })] })] }), _jsxs("div", { className: "search-body", children: [_jsx("p", { children: item.description ? item.description.slice(0, 160) : 'Описание отсутствует.' }), _jsx("div", { className: "search-tags", children: Array.isArray(item.categories) && item.categories.slice(0, 4).map((category) => (_jsx("span", { className: "tag", children: category }, category))) })] }), _jsxs("div", { className: "search-footer", children: [_jsxs("div", { children: [_jsxs("span", { className: "small-text", children: ["\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0438: ", item.downloads ?? 0] }), _jsxs("span", { className: "small-text", children: ["   \u0412\u0435\u0440\u0441\u0438\u0439: ", item.versions?.length ?? 0] })] }), _jsx("button", { className: "outline-button", onClick: () => installModrinthProject(item), disabled: modrinthLoading || isBusy, children: item.project_type === 'modpack' ? 'Скачать модпак' : 'Скачать' })] })] }, item.id)))] }), modrinthTotalHits > 20 && (_jsxs("div", { className: "pagination", style: { marginTop: 16 }, children: [_jsx("button", { className: "pagination-btn", disabled: modrinthPage <= 1 || modrinthLoading, onClick: () => searchModrinth(modrinthPage - 1), children: "\u2039 \u041D\u0430\u0437\u0430\u0434" }), _jsxs("div", { className: "pagination-info", children: ["\u0421\u0442\u0440\u0430\u043D\u0438\u0446\u0430 ", modrinthPage, " \u0438\u0437 ", Math.ceil(modrinthTotalHits / 20)] }), _jsx("button", { className: "pagination-btn", disabled: modrinthPage >= Math.ceil(modrinthTotalHits / 20) || modrinthLoading, onClick: () => searchModrinth(modrinthPage + 1), children: "\u0412\u043F\u0435\u0440\u0451\u0434 \u203A" })] }))] }), _jsxs("div", { className: "panel panel small", children: [_jsx("div", { className: "panel-title", children: "\u0423\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044B\u0435 \u0434\u043E\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u044F" }), _jsxs("div", { className: "installed-list", children: [modrinthInstalledAddons.length === 0 && Object.keys(organizedAddons.modpacks).length === 0 && (_jsx("div", { className: "hint", children: "\u041F\u043E\u043A\u0430 \u043D\u0435\u0442 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044B\u0445 \u043C\u043E\u0434\u043E\u0432/\u0448\u0435\u0439\u0434\u0435\u0440\u043E\u0432/\u0440\u0435\u0441\u0443\u0440\u0441\u043E\u0432." })), organizedAddons.standaloneTotal > 0 && (_jsxs("div", { className: "modpack-section", children: [_jsxs("div", { className: "modpack-header", onClick: () => {
+                                                                        }, children: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C" })] })] }, profile.id))), profiles.length === 0 && _jsx("div", { className: "hint", children: "\u0421\u043E\u0437\u0434\u0430\u0439\u0442\u0435 \u043F\u0440\u043E\u0444\u0438\u043B\u044C \u0434\u043B\u044F \u0437\u0430\u043F\u0443\u0441\u043A\u0430" })] })] }), _jsx("div", { className: "panel panel large", children: _jsxs("div", { className: `profile-config-panel ${editingProfile ? '' : 'profile-config-panel-muted'}`, children: [_jsxs("div", { className: "profile-panel-header", children: [_jsx("div", { className: "panel-title", children: editingProfile ? `Настройка: ${editingProfile.name}` : 'Новый профиль' }), editingProfile && (_jsx("button", { type: "button", className: "btn btn-ghost", onClick: () => setEditingProfileId(null), children: "\u041D\u0430\u0437\u0430\u0434 \u043A \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u044E" }))] }), editingProfile ? (_jsx(ProfileForm, { onSave: saveProfileSettings, settings: settings, installed: installed, availableLoaderVersions: availableLoaderVersions, loaderVersionLoading: loaderVersionLoading, ramOptions: profileRamOptions, resetTrigger: profileFormResetTrigger, onLoaderVersionChange: (versionId, loader) => fetchLoaderVersions(versionId, loader), showAlert: showAlert, initialProfile: editingProfile, mode: "edit", submitLabel: "\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u043F\u0440\u043E\u0444\u0438\u043B\u044F", onCancel: () => setEditingProfileId(null) }, `edit-${editingProfile.id}`)) : (_jsx(ProfileForm, { onSave: saveNewProfile, settings: settings, installed: installed, availableLoaderVersions: availableLoaderVersions, loaderVersionLoading: loaderVersionLoading, ramOptions: profileRamOptions, resetTrigger: profileFormResetTrigger, onLoaderVersionChange: (versionId, loader) => fetchLoaderVersions(versionId, loader), showAlert: showAlert, mode: "create", submitLabel: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u043F\u0440\u043E\u0444\u0438\u043B\u044C" }))] }) })] })), activeTab === 'Mods' && (_jsxs("section", { className: `modrinth-grid scrollable-content ${modrinthBrowserView === 'project' ? 'modrinth-project-mode' : ''}`, children: [_jsxs("div", { className: "panel panel large", children: [modrinthBrowserView === 'search' && (_jsxs(_Fragment, { children: [_jsx("div", { className: "panel-title", children: "\u041C\u043E\u0434\u043F\u0430\u043A\u0438" }), _jsxs("div", { className: "modpack-workbench", children: [_jsxs("div", { className: "modpack-workbench-panel", children: [_jsx("div", { className: "workbench-title", children: "\u0426\u0435\u043B\u044C \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u0438" }), _jsx(CustomSelect, { options: modpackTargetOptions, value: selectedModpackTarget, onChange: (val) => setSelectedModpackTarget(val), placeholder: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u043E\u0434\u043F\u0430\u043A" }), selectedModpackProfile ? (_jsxs("div", { className: "target-summary", children: [_jsx("div", { className: "target-name", children: selectedModpackProfile.name }), _jsxs("div", { className: "target-chip-row", children: [_jsx("span", { className: "target-chip", children: selectedModpackProfile.versionId }), _jsx("span", { className: "target-chip", children: formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion) }), _jsx("span", { className: "target-chip", children: formatProfileRam(selectedModpackProfile, settings) })] })] })) : (_jsx("div", { className: "target-warning", children: "\u041F\u0435\u0440\u0435\u0434 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u043E\u0439 \u043C\u043E\u0434\u043E\u0432, \u0440\u0435\u0441\u0443\u0440\u0441\u043F\u0430\u043A\u043E\u0432 \u0438\u043B\u0438 \u0448\u0435\u0439\u0434\u0435\u0440\u043E\u0432 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u043E\u0434\u043F\u0430\u043A." }))] }), _jsxs("div", { className: "modpack-workbench-panel", children: [_jsx("div", { className: "workbench-title", children: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u0441\u0432\u043E\u0439 \u043C\u043E\u0434\u043F\u0430\u043A" }), _jsxs("div", { className: "modpack-create-grid", children: [_jsxs("label", { children: ["\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435", _jsx("input", { value: modpackCreateForm.name, onChange: (e) => setModpackCreateForm((prev) => ({ ...prev, name: e.target.value })), placeholder: "\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440 Kuro Survival" })] }), _jsxs("label", { children: ["\u0412\u0435\u0440\u0441\u0438\u044F Minecraft", _jsx(CustomSelect, { options: [{ value: '', label: 'Выберите версию' }, ...versionSelectOptions], value: modpackCreateForm.versionId, onChange: (val) => setModpackCreateForm((prev) => ({ ...prev, versionId: val, loaderVersion: '' })), placeholder: "\u0412\u0435\u0440\u0441\u0438\u044F" })] }), _jsxs("label", { children: ["\u041C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440", _jsx(CustomSelect, { options: [
+                                                                                            { value: 'forge', label: 'Forge' },
+                                                                                            { value: 'fabric', label: 'Fabric' },
+                                                                                            { value: 'quilt', label: 'Quilt' },
+                                                                                            { value: 'neoforge', label: 'NeoForge' },
+                                                                                            { value: 'vanilla', label: 'Vanilla' }
+                                                                                        ], value: modpackCreateForm.loader, onChange: (val) => setModpackCreateForm((prev) => ({ ...prev, loader: val, loaderVersion: '' })), placeholder: "\u041C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440" })] }), _jsxs("label", { children: ["\u0412\u0435\u0440\u0441\u0438\u044F \u043C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440\u0430", _jsx(CustomSelect, { options: [
+                                                                                            { value: '', label: modpackCreateForm.loader === 'vanilla' ? 'Не требуется' : modpackCreateLoaderLoading ? 'Загрузка...' : 'Выберите версию' },
+                                                                                            ...modpackCreateLoaderVersions
+                                                                                        ], value: modpackCreateForm.loaderVersion, onChange: (val) => setModpackCreateForm((prev) => ({ ...prev, loaderVersion: val })), placeholder: "\u0412\u0435\u0440\u0441\u0438\u044F \u043C\u043E\u0434\u043B\u043E\u0430\u0434\u0435\u0440\u0430", disabled: modpackCreateForm.loader === 'vanilla' || modpackCreateLoaderLoading })] }), _jsx("button", { className: "button", onClick: createCustomModpack, disabled: modpackCreateLoading || modpackCreateLoaderLoading, children: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u043C\u043E\u0434\u043F\u0430\u043A" })] })] })] })] })), modrinthBrowserView === 'search' && _jsx("div", { className: "panel-title", style: { marginTop: 18 }, children: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 Modrinth" }), modrinthBrowserView === 'search' ? (_jsxs(_Fragment, { children: [selectedModpackProfile && isTargetedModrinthType && (_jsxs("div", { className: "modrinth-filter-note", children: ["\u041F\u043E\u0438\u0441\u043A \u0434\u043E\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u0439 \u0438\u0434\u0451\u0442 \u043F\u043E\u0434 \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u044B\u0439 \u043C\u043E\u0434\u043F\u0430\u043A: ", selectedModpackProfile.versionId, " \u2022 ", formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion)] })), _jsxs("div", { className: "form-grid", children: [_jsxs("label", { children: ["\u041F\u043E\u0438\u0441\u043A", _jsx("input", { value: modrinthQuery, onChange: (e) => setModrinthQuery(e.target.value), placeholder: "\u0418\u043C\u044F \u043C\u043E\u0434\u0430, \u0442\u0435\u043A\u0441\u0442 \u0438\u043B\u0438 ID" })] }), _jsxs("label", { children: ["\u0412\u0435\u0440\u0441\u0438\u044F Minecraft", _jsx("input", { value: effectiveModrinthVersion, onChange: (e) => setModrinthSearchVersion(e.target.value), placeholder: "\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440 1.20.1", disabled: Boolean(selectedModpackProfile && isTargetedModrinthType) })] }), _jsxs("label", { children: ["\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A", _jsx(CustomSelect, { options: [
+                                                                            { value: '', label: 'Любой' },
+                                                                            { value: 'fabric', label: 'Fabric' },
+                                                                            { value: 'forge', label: 'Forge' },
+                                                                            { value: 'quilt', label: 'Quilt' },
+                                                                            { value: 'neoforge', label: 'NeoForge' }
+                                                                        ], value: effectiveModrinthLoader, onChange: (val) => setModrinthSearchLoader(val), placeholder: "\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A", disabled: Boolean(selectedModpackProfile && isTargetedModrinthType) })] }), _jsxs("label", { children: ["\u0422\u0438\u043F \u043A\u043E\u043D\u0442\u0435\u043D\u0442\u0430", _jsx(CustomSelect, { options: [
+                                                                            { value: 'all', label: 'Все' },
+                                                                            { value: 'mod', label: 'Моды' },
+                                                                            { value: 'modpack', label: 'Модпаки' },
+                                                                            { value: 'resourcepack', label: 'Ресурсы' },
+                                                                            { value: 'shader', label: 'Шейдеры' }
+                                                                        ], value: modrinthSearchType, onChange: (val) => setModrinthSearchType(val), placeholder: "\u0422\u0438\u043F" })] }), _jsx("button", { className: "button", onClick: () => searchModrinth(1), disabled: modrinthLoading, children: "\u0418\u0441\u043A\u0430\u0442\u044C" })] }), _jsxs("div", { className: "panel-title", style: { marginTop: 18 }, children: ["\u0420\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u044B \u043F\u043E\u0438\u0441\u043A\u0430 ", modrinthTotalHits ? `(${modrinthTotalHits} найдено)` : ''] }), _jsxs("div", { className: "search-results grid", children: [modrinthLoading && _jsx("div", { className: "hint", children: "\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0430 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u043E\u0432..." }), !modrinthLoading && modrinthSearchResults.length === 0 && _jsx("div", { className: "hint", children: "\u041D\u0435\u0442 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u043E\u0432. \u041F\u043E\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0434\u0440\u0443\u0433\u043E\u0439 \u0437\u0430\u043F\u0440\u043E\u0441 \u0438\u043B\u0438 \u0441\u043C\u0435\u043D\u0438\u0442\u0435 \u0444\u0438\u043B\u044C\u0442\u0440\u044B." }), modrinthSearchResults.map((item) => (_jsxs("article", { className: "search-card modrinth-card", tabIndex: 0, onClick: () => openModrinthProject(item), onKeyDown: (event) => {
+                                                                    if (event.key === 'Enter' || event.key === ' ') {
+                                                                        event.preventDefault();
+                                                                        openModrinthProject(item);
+                                                                    }
+                                                                }, children: [_jsxs("div", { className: "search-card-header", children: [_jsx("img", { src: item.icon_url || '', alt: item.title || item.name, className: "search-card-icon" }), _jsxs("div", { children: [_jsx("div", { className: "search-title", children: item.title || item.name }), _jsxs("div", { className: "search-meta", children: [formatModrinthProjectType(item.project_type), " \u2022 ", item.primary_category || item.loader_type || 'Без категории'] })] })] }), _jsxs("div", { className: "search-body", children: [_jsx("p", { children: item.description ? item.description.slice(0, 160) : 'Описание отсутствует.' }), _jsx("div", { className: "search-tags", children: Array.isArray(item.categories) && item.categories.slice(0, 4).map((category) => (_jsx("span", { className: "tag", children: category }, category))) })] }), _jsxs("div", { className: "search-footer", children: [_jsxs("div", { children: [_jsxs("span", { className: "small-text", children: ["\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0438: ", formatCompactNumber(item.downloads)] }), _jsxs("span", { className: "small-text", children: ["   \u0412\u0435\u0440\u0441\u0438\u0439: ", item.versions?.length ?? 0] })] }), _jsxs("div", { className: "search-footer-actions", children: [_jsx("button", { className: "outline-button", onClick: (event) => {
+                                                                                            event.stopPropagation();
+                                                                                            openModrinthProject(item);
+                                                                                        }, disabled: modrinthLoading, children: "\u041F\u043E\u0434\u0440\u043E\u0431\u043D\u0435\u0435" }), _jsx("button", { className: "outline-button", onClick: (event) => {
+                                                                                            event.stopPropagation();
+                                                                                            installModrinthProject(item);
+                                                                                        }, disabled: modrinthLoading || isBusy, children: item.project_type === 'modpack' ? 'Скачать модпак' : 'Скачать' })] })] })] }, item.id)))] }), modrinthTotalHits > 20 && (_jsxs("div", { className: "pagination", style: { marginTop: 16 }, children: [_jsx("button", { className: "pagination-btn", disabled: modrinthPage <= 1 || modrinthLoading, onClick: () => searchModrinth(modrinthPage - 1), children: "\u2039 \u041D\u0430\u0437\u0430\u0434" }), _jsxs("div", { className: "pagination-info", children: ["\u0421\u0442\u0440\u0430\u043D\u0438\u0446\u0430 ", modrinthPage, " \u0438\u0437 ", Math.ceil(modrinthTotalHits / 20)] }), _jsx("button", { className: "pagination-btn", disabled: modrinthPage >= Math.ceil(modrinthTotalHits / 20) || modrinthLoading, onClick: () => searchModrinth(modrinthPage + 1), children: "\u0412\u043F\u0435\u0440\u0451\u0434 \u203A" })] }))] })) : (_jsxs("div", { className: "modrinth-project-view", children: [_jsxs("div", { className: "modrinth-project-toolbar", children: [_jsx("button", { className: "outline-button", onClick: closeModrinthProject, children: "\u2190 \u041A \u043F\u043E\u0438\u0441\u043A\u0443" }), _jsxs("div", { className: "modrinth-project-toolbar-actions", children: [_jsx("button", { className: "outline-button", onClick: () => selectedModrinthProject && openModrinthProject(selectedModrinthProject, true), disabled: modrinthDetailLoading, children: "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C" }), _jsx("button", { className: "outline-button", onClick: () => selectedModrinthProject && window.launcher.openExternal(getModrinthProjectUrl(selectedModrinthProject)), children: "Modrinth" })] })] }), modrinthDetailLoading && _jsx("div", { className: "hint", children: "\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0430 \u043F\u0440\u043E\u0435\u043A\u0442\u0430 \u0438 \u0432\u0435\u0440\u0441\u0438\u0439..." }), selectedModrinthProject && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "modrinth-project-hero", children: [_jsx("img", { src: selectedModrinthProject.icon_url || '', alt: selectedModrinthProject.title || selectedModrinthProject.name, className: "modrinth-project-icon" }), _jsxs("div", { className: "modrinth-project-copy", children: [_jsxs("div", { className: "modrinth-project-kicker", children: [formatModrinthProjectType(selectedModrinthProject.project_type), " \u2022 ", selectedModrinthProject.slug || selectedModrinthProject.id] }), _jsx("h2", { children: selectedModrinthProject.title || selectedModrinthProject.name }), _jsx("p", { children: selectedModrinthProject.description || 'Описание отсутствует.' }), _jsx("div", { className: "search-tags", children: Array.isArray(selectedModrinthProject.categories) && selectedModrinthProject.categories.slice(0, 8).map((category) => (_jsx("span", { className: "tag", children: category }, category))) })] }), _jsxs("div", { className: "modrinth-project-metrics", children: [_jsxs("span", { children: [_jsx("strong", { children: formatCompactNumber(selectedModrinthProject.downloads) }), " \u0437\u0430\u0433\u0440\u0443\u0437\u043E\u043A"] }), _jsxs("span", { children: [_jsx("strong", { children: formatCompactNumber(selectedModrinthProject.followers) }), " \u043F\u043E\u0434\u043F\u0438\u0441\u0447\u0438\u043A\u043E\u0432"] }), _jsxs("span", { children: [_jsx("strong", { children: selectedModrinthVersions.length }), " \u0432\u0435\u0440\u0441\u0438\u0439"] }), _jsxs("span", { children: ["\u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u043E ", _jsx("strong", { children: formatModrinthDate(selectedModrinthProject.updated || selectedModrinthProject.date_modified) })] })] })] }), _jsxs("div", { className: "modrinth-project-tabs", role: "tablist", "aria-label": "\u0420\u0430\u0437\u0434\u0435\u043B\u044B \u043F\u0440\u043E\u0435\u043A\u0442\u0430", children: [_jsxs("button", { type: "button", className: modrinthProjectTab === 'versions' ? 'active' : '', onClick: () => setModrinthProjectTab('versions'), children: ["\u0412\u0435\u0440\u0441\u0438\u0438 ", _jsx("span", { children: selectedModrinthVersions.length })] }), _jsxs("button", { type: "button", className: modrinthProjectTab === 'images' ? 'active' : '', onClick: () => setModrinthProjectTab('images'), children: ["\u0418\u0437\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u0438\u044F ", _jsx("span", { children: selectedModrinthProjectImages.length })] }), _jsx("button", { type: "button", className: modrinthProjectTab === 'description' ? 'active' : '', onClick: () => setModrinthProjectTab('description'), children: "\u041E\u043F\u0438\u0441\u0430\u043D\u0438\u0435" })] }), _jsxs("div", { className: "modrinth-project-layout", children: [_jsxs("div", { className: `modrinth-project-content-panel modrinth-project-content-${modrinthProjectTab}`, children: [modrinthProjectTab === 'versions' && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "modrinth-section-row", children: [_jsx("div", { className: "modrinth-section-title", children: "\u0412\u0435\u0440\u0441\u0438\u0438" }), _jsxs("span", { children: [filteredModrinthVersions.length, " \u0438\u0437 ", selectedModrinthVersions.length] })] }), _jsxs("div", { className: "modrinth-version-controls", children: [_jsx(CustomSelect, { options: [{ value: '', label: 'Все версии Minecraft' }, ...modrinthVersionGameOptions.map((item) => ({ value: item, label: item }))], value: modrinthVersionGameFilter, onChange: (val) => setModrinthVersionGameFilter(val), placeholder: "Minecraft" }), _jsx(CustomSelect, { options: [{ value: '', label: 'Все загрузчики' }, ...modrinthVersionLoaderOptions.map((item) => ({ value: item, label: item }))], value: modrinthVersionLoaderFilter, onChange: (val) => setModrinthVersionLoaderFilter(val), placeholder: "\u0417\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043A" }), _jsx(CustomSelect, { options: [
+                                                                                                    { value: '', label: 'Любой релиз' },
+                                                                                                    { value: 'release', label: 'Релиз' },
+                                                                                                    { value: 'beta', label: 'Бета' },
+                                                                                                    { value: 'alpha', label: 'Альфа' }
+                                                                                                ], value: modrinthVersionReleaseFilter, onChange: (val) => setModrinthVersionReleaseFilter(val), placeholder: "\u0422\u0438\u043F" })] }), _jsxs("div", { className: "modrinth-version-list", children: [filteredModrinthVersions.length === 0 && _jsx("div", { className: "hint", children: "\u041D\u0435\u0442 \u0432\u0435\u0440\u0441\u0438\u0439 \u043F\u043E\u0434 \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u044B\u0435 \u0444\u0438\u043B\u044C\u0442\u0440\u044B." }), filteredModrinthVersions.map((version) => {
+                                                                                                const selected = selectedModrinthVersion?.id === version.id;
+                                                                                                return (_jsxs("button", { type: "button", className: `modrinth-version-row ${selected ? 'selected' : ''}`, onClick: () => setSelectedModrinthVersionId(version.id), children: [_jsxs("span", { className: "modrinth-version-main", children: [_jsx("strong", { children: version.name || version.version_number }), _jsxs("span", { children: [version.version_number, " \u2022 ", modrinthVersionTypeLabels[version.version_type] || version.version_type || 'версия', " \u2022 ", formatModrinthDate(version.date_published)] })] }), _jsxs("span", { className: "modrinth-version-tags", children: [Array.isArray(version.game_versions) && version.game_versions.slice(0, 2).map((gameVersion) => (_jsx("span", { children: gameVersion }, gameVersion))), Array.isArray(version.loaders) && version.loaders.slice(0, 1).map((loaderName) => (_jsx("span", { children: loaderName }, loaderName)))] })] }, version.id));
+                                                                                            })] })] })), modrinthProjectTab === 'images' && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "modrinth-section-row", children: [_jsx("div", { className: "modrinth-section-title", children: "\u0418\u0437\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u0438\u044F \u043F\u0440\u043E\u0435\u043A\u0442\u0430" }), _jsx("span", { children: selectedModrinthProjectImages.length || 'нет изображений' })] }), selectedModrinthProjectImages.length === 0 ? (_jsx("div", { className: "hint", children: "\u0423 \u044D\u0442\u043E\u0433\u043E \u043F\u0440\u043E\u0435\u043A\u0442\u0430 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442 \u0438\u0437\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u0438\u0439 \u043D\u0430 Modrinth." })) : (_jsxs("div", { className: "modrinth-gallery", children: [selectedModrinthImage && (_jsxs("div", { className: "modrinth-gallery-stage", children: [_jsx("img", { src: selectedModrinthImage.url, alt: selectedModrinthImage.title }), _jsxs("div", { className: "modrinth-gallery-caption", children: [_jsxs("div", { children: [_jsx("strong", { children: selectedModrinthImage.title }), selectedModrinthImage.description && _jsx("span", { children: selectedModrinthImage.description })] }), _jsx("button", { className: "outline-button", onClick: () => window.launcher.openExternal(selectedModrinthImage.raw_url || selectedModrinthImage.url), children: "\u041E\u0442\u043A\u0440\u044B\u0442\u044C" })] })] })), _jsx("div", { className: "modrinth-gallery-thumbs", children: selectedModrinthProjectImages.map((image, index) => (_jsxs("button", { type: "button", className: index === selectedModrinthImageIndex ? 'active' : '', onClick: () => setSelectedModrinthImageIndex(index), children: [_jsx("img", { src: image.url, alt: image.title }), _jsx("span", { children: image.title })] }, `${image.url}-${index}`))) })] }))] })), modrinthProjectTab === 'description' && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "modrinth-section-row", children: [_jsx("div", { className: "modrinth-section-title", children: "\u041E\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u043F\u0440\u043E\u0435\u043A\u0442\u0430" }), _jsx("span", { children: "Modrinth" })] }), _jsx("div", { className: "modrinth-markdown-text modrinth-description-panel-text", children: getProjectBodySummary(selectedModrinthProject).split('\n').filter(Boolean).map((line, index) => (_jsx("p", { children: line }, `${line.slice(0, 18)}-${index}`))) })] }))] }), _jsxs("aside", { className: "modrinth-install-panel", children: [selectedModrinthProjectType !== 'modpack' && (_jsxs("div", { className: "modrinth-install-target", children: [_jsx("span", { children: "\u0426\u0435\u043B\u044C \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u0438" }), _jsx(CustomSelect, { options: modpackTargetOptions, value: selectedModpackTarget, onChange: (val) => setSelectedModpackTarget(val), placeholder: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u043E\u0434\u043F\u0430\u043A" })] })), selectedModrinthProjectType !== 'modpack' && !selectedModpackProfile && (_jsx("div", { className: "target-warning", children: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u043E\u0434\u043F\u0430\u043A \u0432 \u0431\u043B\u043E\u043A\u0435 \u0432\u044B\u0448\u0435, \u0447\u0442\u043E\u0431\u044B \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u0443\u044E \u0432\u0435\u0440\u0441\u0438\u044E." })), _jsxs("div", { className: "modrinth-install-bar", children: [_jsxs("div", { children: [_jsx("span", { children: "\u0412\u044B\u0431\u0440\u0430\u043D\u043E" }), _jsx("strong", { children: selectedModrinthVersion ? selectedModrinthVersion.version_number || selectedModrinthVersion.name : 'нет версии' })] }), _jsx("button", { className: "button", onClick: installSelectedModrinthVersion, disabled: !selectedModrinthVersion || isBusy || modrinthDetailLoading, children: selectedModrinthProjectType === 'modpack' ? 'Установить модпак' : 'Установить версию' })] }), selectedModrinthVersion && (_jsxs("div", { className: "modrinth-version-detail", children: [_jsxs("div", { children: [_jsx("span", { children: "\u0424\u0430\u0439\u043B" }), _jsx("strong", { children: summarizeVersionFile(selectedModrinthVersion) })] }), _jsxs("div", { children: [_jsx("span", { children: "\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0438 \u0432\u0435\u0440\u0441\u0438\u0438" }), _jsx("strong", { children: formatCompactNumber(selectedModrinthVersion.downloads) })] }), _jsxs("div", { children: [_jsx("span", { children: "\u0417\u0430\u0432\u0438\u0441\u0438\u043C\u043E\u0441\u0442\u0438" }), _jsx("strong", { children: selectedModrinthVersion.dependencies?.length || 0 })] }), selectedModrinthVersion.changelog && (_jsx("p", { children: normalizeMarkdownText(selectedModrinthVersion.changelog).slice(0, 520) }))] })), _jsxs("div", { className: "modrinth-project-facts", children: [_jsxs("div", { children: [_jsx("span", { children: "\u041A\u043B\u0438\u0435\u043D\u0442" }), _jsx("strong", { children: formatSideSupport(selectedModrinthProject.client_side) })] }), _jsxs("div", { children: [_jsx("span", { children: "\u0421\u0435\u0440\u0432\u0435\u0440" }), _jsx("strong", { children: formatSideSupport(selectedModrinthProject.server_side) })] }), _jsxs("div", { children: [_jsx("span", { children: "\u041B\u0438\u0446\u0435\u043D\u0437\u0438\u044F" }), _jsx("strong", { children: selectedModrinthProject.license?.name || selectedModrinthProject.license?.id || 'не указана' })] }), _jsxs("div", { children: [_jsx("span", { children: "\u0421\u043E\u0437\u0434\u0430\u043D\u043E" }), _jsx("strong", { children: formatModrinthDate(selectedModrinthProject.published || selectedModrinthProject.date_created) })] })] }), _jsxs("div", { className: "modrinth-link-row", children: [selectedModrinthProject.source_url && _jsx("button", { className: "outline-button", onClick: () => window.launcher.openExternal(selectedModrinthProject.source_url), children: "Source" }), selectedModrinthProject.issues_url && _jsx("button", { className: "outline-button", onClick: () => window.launcher.openExternal(selectedModrinthProject.issues_url), children: "Issues" }), selectedModrinthProject.wiki_url && _jsx("button", { className: "outline-button", onClick: () => window.launcher.openExternal(selectedModrinthProject.wiki_url), children: "Wiki" }), selectedModrinthProject.discord_url && _jsx("button", { className: "outline-button", onClick: () => window.launcher.openExternal(selectedModrinthProject.discord_url), children: "Discord" })] })] })] })] }))] }))] }), modrinthBrowserView === 'search' && (_jsxs("div", { className: "panel panel small", children: [_jsx("div", { className: "panel-title", children: "\u0423\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044B\u0435 \u0434\u043E\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u044F" }), _jsxs("div", { className: "installed-list", children: [modrinthInstalledAddons.length === 0 && Object.keys(organizedAddons.modpacks).length === 0 && (_jsx("div", { className: "hint", children: "\u041F\u043E\u043A\u0430 \u043D\u0435\u0442 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044B\u0445 \u043C\u043E\u0434\u043E\u0432/\u0448\u0435\u0439\u0434\u0435\u0440\u043E\u0432/\u0440\u0435\u0441\u0443\u0440\u0441\u043E\u0432." })), organizedAddons.standaloneTotal > 0 && (_jsxs("div", { className: "modpack-section", children: [_jsxs("div", { className: "modpack-header", onClick: () => {
                                                                     setStandaloneExpanded(!standaloneExpanded);
                                                                     if (!standaloneExpanded)
                                                                         setExpandedModpacks(new Set());
@@ -1497,7 +1825,7 @@ function App() {
                                                                                     e.stopPropagation();
                                                                                     deleteModpack(pack.key, pack.title);
                                                                                 }, style: { fontSize: 12, padding: '4px 8px' }, "aria-label": `Удалить модпак ${pack.title}`, title: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C \u043C\u043E\u0434\u043F\u0430\u043A", children: "\u00D7" }) })] }), isExpanded && (_jsx(motion.div, { className: "modpack-content", initial: { height: 0, opacity: 0 }, animate: { height: 'auto', opacity: 1 }, exit: { height: 0, opacity: 0 }, transition: { duration: 0.2 }, children: _jsxs("div", { className: "addon-category-grid", children: [renderAddonCategory(pack.key, 'mods', pack.categories.mods, defaultCategory), renderAddonCategory(pack.key, 'resourcepacks', pack.categories.resourcepacks, defaultCategory), renderAddonCategory(pack.key, 'shaderpacks', pack.categories.shaderpacks, defaultCategory)] }) }))] }, pack.key));
-                                                    })] })] })] })), activeTab === 'Settings' && (_jsxs("section", { className: "settings-grid", children: [_jsxs("div", { className: "panel large", children: [_jsx("div", { className: "panel-title", children: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438" }), _jsxs("div", { className: "form-grid", children: [_jsxs("label", { children: ["\u0410\u043A\u0446\u0435\u043D\u0442", _jsx("div", { style: { marginTop: 8 }, children: _jsx(CustomSelect, { options: [
+                                                    })] })] }))] })), activeTab === 'Settings' && (_jsxs("section", { className: "settings-grid", children: [_jsxs("div", { className: "panel large", children: [_jsx("div", { className: "panel-title", children: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438" }), _jsxs("div", { className: "form-grid", children: [_jsxs("label", { children: ["\u0410\u043A\u0446\u0435\u043D\u0442", _jsx("div", { style: { marginTop: 8 }, children: _jsx(CustomSelect, { options: [
                                                                         { value: 'red', label: 'Красный' },
                                                                         { value: 'violet', label: 'Фиолетовый' },
                                                                         { value: 'white', label: 'Белый' }

@@ -1,7 +1,7 @@
 {
   "name": "kuro-launcher",
   "productName": "KuroLauncher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Modern Minecraft launcher with dark Japanese aesthetics.",
   "main": "electron/main.js",
   "scripts": {
@@ -44,6 +44,9 @@
   "build": {
     "appId": "com.kurolauncher.app",
     "productName": "KuroLauncher",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "dist/**",
       "electron/**",
@@ -52,17 +55,33 @@
     "extraResources": [],
     "win": {
       "icon": "logo/KuroLauncher.ico",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
       "target": [
-        "nsis",
-        "portable"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
+      "allowElevation": true,
+      "installerIcon": "installerIcon.ico",
+      "uninstallerIcon": "uninstallerIcon.ico",
+      "installerHeader": "installerHeader.bmp",
+      "installerHeaderIcon": "installerHeaderIcon.ico",
+      "installerSidebar": "installerSidebar.bmp",
+      "uninstallerSidebar": "installerSidebar.bmp",
+      "include": "installer.nsh",
+      "artifactName": "KuroLauncher-Setup-${version}-${arch}.${ext}",
+      "uninstallDisplayName": "KuroLauncher ${version}",
+      "createDesktopShortcut": false,
       "createStartMenuShortcut": true,
+      "menuCategory": "KuroLauncher",
+      "runAfterFinish": true,
       "shortcutName": "KuroLauncher"
     },
     "electronDist": "node_modules/electron/dist",

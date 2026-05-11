@@ -35,6 +35,12 @@ let currentDevServerPort = null
 let minecraftProcessActive = false
 let mainWindowShownAt = 0
 const STARTUP_CLOSE_GUARD_MS = 1500
+const CUSTOM_SKIN_LOADER_PROJECT_ID = 'customskinloader'
+const CUSTOM_SKIN_LOADER_PROFILE_NAME = 'KuroLauncher LocalSkin'
+const CUSTOM_SKIN_LOADER_DATA_DIR = 'CustomSkinLoader'
+const CUSTOM_SKIN_LOADER_MARKER_FILE = 'kuro-launcher.json'
+const CUSTOM_SKIN_LOADER_LOCAL_SKIN = 'LocalSkin/skins/{USERNAME}.png'
+const MOD_LOADER_TYPES = new Set(['forge', 'fabric', 'quilt', 'neoforge'])
 
 function broadcastLaunchProgress(payload = {}) {
   try {
@@ -70,21 +76,56 @@ async function ensureStorage() {
 }
 
 // IPC handlers for skin management
-ipcMain.handle('launcher:saveSkin', async (event, profileId, base64Data) => {
+ipcMain.handle('launcher:saveSkin', async (event, profileId, base64Data, options = {}) => {
   try {
     const skinsDir = path.join(userData, 'skins')
     await fs.mkdir(skinsDir, { recursive: true })
-    // base64Data may be a data URL or raw base64
-    let raw = base64Data
-    if (typeof raw === 'string' && raw.startsWith('data:')) {
-      raw = raw.split(',', 2)[1]
-    }
-    const buf = Buffer.from(raw || '', 'base64')
-    const filename = `${profileId}.png`
+    const filename = getProfileSkinFileName(profileId)
     const destination = path.join(skinsDir, filename)
-    await fs.writeFile(destination, buf)
+    const hasIncomingSkin = typeof base64Data === 'string' && base64Data.trim().length > 0
+
+    if (hasIncomingSkin) {
+      // base64Data may be a data URL or raw base64
+      let raw = base64Data
+      if (typeof raw === 'string' && raw.startsWith('data:')) {
+        raw = raw.split(',', 2)[1]
+      }
+      const buf = Buffer.from(raw || '', 'base64')
+      await fs.writeFile(destination, buf)
+    }
+
+    if (!fsSync.existsSync(destination)) {
+      return { ok: false, error: 'skin_file_missing' }
+    }
+
     const url = skinServerPort ? `http://127.0.0.1:${skinServerPort}/skins/${filename}` : null
-    return { ok: true, url }
+    let customSkinLoader = null
+
+    try {
+      const profiles = await getProfiles()
+      const profile = profiles.find((item) => item.id === profileId)
+      if (profile) {
+        customSkinLoader = await prepareCustomSkinLoaderForProfile({
+          ...profile,
+          skin: {
+            ...(profile.skin || {}),
+            model: options?.model === 'slim' ? 'slim' : 'classic',
+            url: url || profile.skin?.url || ''
+          }
+        }, {
+          minecraftUsername: options?.username,
+          installMod: true
+        })
+      }
+    } catch (integrationError) {
+      console.warn('Failed to integrate skin with CustomSkinLoader:', integrationError && integrationError.message)
+      customSkinLoader = {
+        ok: false,
+        error: integrationError && integrationError.message ? integrationError.message : String(integrationError || 'unknown')
+      }
+    }
+
+    return { ok: true, url, customSkinLoader }
   } catch (e) {
     console.error('Failed to save skin:', e && e.message)
     return { ok: false, error: e && e.message }
@@ -93,7 +134,7 @@ ipcMain.handle('launcher:saveSkin', async (event, profileId, base64Data) => {
 
 ipcMain.handle('launcher:getSkinUrl', async (event, profileId) => {
   try {
-    const filename = `${profileId}.png`
+    const filename = getProfileSkinFileName(profileId)
     const filePath = path.join(userData, 'skins', filename)
     if (fsSync.existsSync(filePath) && skinServerPort) {
       return `http://127.0.0.1:${skinServerPort}/skins/${filename}`
@@ -344,6 +385,273 @@ async function downloadFile(url, destination) {
   } catch (error) {
     writer.destroy()
     throw error
+  }
+}
+
+function getProfileSkinFileName(profileId) {
+  return `${sanitizeManagedFileName(profileId)}.png`
+}
+
+function isModLoaderProfile(profile) {
+  return MOD_LOADER_TYPES.has(String(profile?.loader || '').toLowerCase())
+}
+
+function getProfileGameDirectory(profile) {
+  if (!profile?.modpackPath) return minecraftPath
+
+  const resolved = path.resolve(profile.modpackPath)
+  if (!isPathInside(modpacksPath, resolved)) {
+    throw new Error('Некорректный путь модпака для CustomSkinLoader')
+  }
+  return resolved
+}
+
+function getProfileModsDirectory(profile) {
+  return path.join(getProfileGameDirectory(profile), 'mods')
+}
+
+function getCustomSkinLoaderDataDir(profile) {
+  return path.join(getProfileGameDirectory(profile), CUSTOM_SKIN_LOADER_DATA_DIR)
+}
+
+function getCustomSkinLoaderMarkerPath(profile) {
+  return path.join(getCustomSkinLoaderDataDir(profile), CUSTOM_SKIN_LOADER_MARKER_FILE)
+}
+
+function getCustomSkinLoaderModel(profile) {
+  return profile?.skin?.model === 'slim' ? 'slim' : 'default'
+}
+
+function isCustomSkinLoaderJarName(fileName) {
+  return /\.jar$/i.test(String(fileName || '')) && /customskinloader/i.test(String(fileName || ''))
+}
+
+async function resolveMinecraftUsernameForProfile(profile, explicitUsername = '') {
+  const launcherSettings = await getSettings().catch(() => defaultLauncherSettings)
+  const authState = await readJson(authPath, {})
+  return normalizeMinecraftUsername(explicitUsername)
+    || normalizeMinecraftUsername(launcherSettings.profileName)
+    || normalizeMinecraftUsername(authState.name)
+    || normalizeMinecraftUsername(profile?.username)
+    || 'KuroPlayer'
+}
+
+async function writeCustomSkinLoaderConfig(profile) {
+  const dataDir = getCustomSkinLoaderDataDir(profile)
+  const configPath = path.join(dataDir, 'CustomSkinLoader.json')
+  await fs.mkdir(dataDir, { recursive: true })
+
+  const existing = await readJson(configPath, null)
+  const config = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {}
+  const currentLoadlist = Array.isArray(config.loadlist) ? config.loadlist : []
+  const localSkinEntry = {
+    name: CUSTOM_SKIN_LOADER_PROFILE_NAME,
+    type: 'Legacy',
+    checkPNG: false,
+    skin: CUSTOM_SKIN_LOADER_LOCAL_SKIN,
+    model: getCustomSkinLoaderModel(profile)
+  }
+
+  config.loadlist = [
+    localSkinEntry,
+    ...currentLoadlist.filter((entry) => entry?.name !== CUSTOM_SKIN_LOADER_PROFILE_NAME)
+  ]
+
+  if (!config.version) config.version = '14.0'
+  if (typeof config.enableDynamicSkull !== 'boolean') config.enableDynamicSkull = true
+  if (typeof config.enableTransparentSkin !== 'boolean') config.enableTransparentSkin = true
+  if (typeof config.forceLoadAllTextures !== 'boolean') config.forceLoadAllTextures = true
+  if (typeof config.enableCape !== 'boolean') config.enableCape = true
+  if (typeof config.threadPoolSize !== 'number' || config.threadPoolSize < 1) config.threadPoolSize = 4
+  if (typeof config.cacheExpiry !== 'number') config.cacheExpiry = 30
+  if (typeof config.enableLocalProfileCache !== 'boolean') config.enableLocalProfileCache = false
+  if (typeof config.enableCacheAutoClean !== 'boolean') config.enableCacheAutoClean = false
+
+  await saveJson(configPath, config)
+  return configPath
+}
+
+async function copySkinToCustomSkinLoader(profile, minecraftUsername) {
+  const source = path.join(userData, 'skins', getProfileSkinFileName(profile.id))
+  if (!fsSync.existsSync(source)) return null
+
+  const localSkinPath = path.join(getCustomSkinLoaderDataDir(profile), 'LocalSkin', 'skins', `${minecraftUsername}.png`)
+  await fs.mkdir(path.dirname(localSkinPath), { recursive: true })
+  await fs.copyFile(source, localSkinPath)
+  return localSkinPath
+}
+
+async function mergeCustomSkinLoaderMarker(profile, patch = {}) {
+  const markerPath = getCustomSkinLoaderMarkerPath(profile)
+  const existing = await readJson(markerPath, {})
+  const next = {
+    ...existing,
+    managedBy: 'KuroLauncher',
+    updatedAt: new Date().toISOString()
+  }
+
+  if (patch.profileSkin) {
+    next.profileSkins = {
+      ...(existing.profileSkins || {}),
+      [profile.id]: patch.profileSkin
+    }
+  }
+
+  if (patch.customSkinLoader) {
+    next.customSkinLoader = patch.customSkinLoader
+  }
+
+  await saveJson(markerPath, next)
+  return next
+}
+
+async function findActiveCustomSkinLoaderJar(modsDir) {
+  try {
+    const entries = await fs.readdir(modsDir, { withFileTypes: true })
+    const match = entries.find((entry) =>
+      entry.isFile() &&
+      isCustomSkinLoaderJarName(entry.name) &&
+      !entry.name.toLowerCase().endsWith('.disabled')
+    )
+    return match ? path.join(modsDir, match.name) : null
+  } catch {
+    return null
+  }
+}
+
+async function removeManagedCustomSkinLoaderJar(modsDir, marker, nextFileName) {
+  const managedFileName = marker?.customSkinLoader?.managedBy === 'KuroLauncher'
+    ? marker.customSkinLoader.fileName
+    : ''
+  if (!managedFileName || managedFileName === nextFileName || !isCustomSkinLoaderJarName(managedFileName)) return
+
+  try {
+    const oldPath = path.join(modsDir, sanitizeManagedFileName(managedFileName))
+    if (isPathInside(modsDir, oldPath) && fsSync.existsSync(oldPath)) {
+      await fs.unlink(oldPath)
+    }
+  } catch (error) {
+    console.warn('Failed to remove old CustomSkinLoader jar:', error && error.message)
+  }
+}
+
+async function chooseCustomSkinLoaderModrinthVersion(profile) {
+  const loader = String(profile?.loader || '').toLowerCase()
+  const versions = await getModrinthVersions(CUSTOM_SKIN_LOADER_PROJECT_ID)
+  const selected = chooseModrinthVersion(versions, profile.versionId, loader)
+  if (!selected) {
+    throw new Error(`Нет совместимой версии CustomSkinLoader для Minecraft ${profile.versionId} / ${loader}`)
+  }
+  return selected
+}
+
+async function ensureCustomSkinLoaderMod(profile) {
+  if (!isModLoaderProfile(profile)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'vanilla',
+      message: 'CustomSkinLoader требует Forge, Fabric, Quilt или NeoForge'
+    }
+  }
+
+  const modsDir = getProfileModsDirectory(profile)
+  await fs.mkdir(modsDir, { recursive: true })
+
+  const marker = await readJson(getCustomSkinLoaderMarkerPath(profile), {})
+  const managed = marker?.customSkinLoader
+  const managedFileName = managed?.managedBy === 'KuroLauncher' ? managed.fileName : ''
+  let managedPath = ''
+  try {
+    if (managedFileName && isCustomSkinLoaderJarName(managedFileName)) {
+      managedPath = path.join(modsDir, sanitizeManagedFileName(managedFileName))
+    }
+  } catch {
+    managedPath = ''
+  }
+  const markerMatchesProfile = managed?.gameVersion === profile.versionId && managed?.loader === profile.loader
+  if (markerMatchesProfile && managedPath && fsSync.existsSync(managedPath) && isPathInside(modsDir, managedPath)) {
+    return { ok: true, existing: true, fileName: managedFileName, managed: true }
+  }
+
+  if (!markerMatchesProfile && managedFileName) {
+    await removeManagedCustomSkinLoaderJar(modsDir, marker, '')
+  }
+
+  const existingJar = await findActiveCustomSkinLoaderJar(modsDir)
+  if (existingJar) {
+    return {
+      ok: true,
+      existing: true,
+      managed: false,
+      fileName: path.basename(existingJar)
+    }
+  }
+
+  const version = await chooseCustomSkinLoaderModrinthVersion(profile)
+  const file = chooseModrinthFile(version.files, 'mod')
+  if (!file?.url || !file?.filename) {
+    throw new Error('Не удалось найти jar CustomSkinLoader на Modrinth')
+  }
+
+  const safeFileName = sanitizeManagedFileName(file.filename)
+  const destination = path.join(modsDir, safeFileName)
+  await removeManagedCustomSkinLoaderJar(modsDir, marker, safeFileName)
+
+  if (!fsSync.existsSync(destination)) {
+    await downloadFile(file.url, destination)
+  }
+
+  await mergeCustomSkinLoaderMarker(profile, {
+    customSkinLoader: {
+      managedBy: 'KuroLauncher',
+      projectId: CUSTOM_SKIN_LOADER_PROJECT_ID,
+      versionId: version.id,
+      versionNumber: version.version_number || version.name || '',
+      gameVersion: profile.versionId,
+      loader: profile.loader,
+      fileName: safeFileName,
+      installedAt: new Date().toISOString()
+    }
+  })
+
+  return {
+    ok: true,
+    installed: true,
+    fileName: safeFileName,
+    version: version.version_number || version.name || version.id
+  }
+}
+
+async function prepareCustomSkinLoaderForProfile(profile, options = {}) {
+  if (!profile?.id) return { ok: true, skipped: true, reason: 'no_profile' }
+
+  const minecraftUsername = await resolveMinecraftUsernameForProfile(profile, options.minecraftUsername)
+  const localSkinPath = await copySkinToCustomSkinLoader(profile, minecraftUsername)
+  if (!localSkinPath) {
+    return { ok: true, skipped: true, reason: 'no_local_skin' }
+  }
+
+  const configPath = await writeCustomSkinLoaderConfig(profile)
+  await mergeCustomSkinLoaderMarker(profile, {
+    profileSkin: {
+      username: minecraftUsername,
+      model: getCustomSkinLoaderModel(profile),
+      localSkin: path.relative(getCustomSkinLoaderDataDir(profile), localSkinPath).replace(/\\/g, '/'),
+      updatedAt: new Date().toISOString()
+    }
+  })
+
+  const mod = options.installMod === false
+    ? { ok: true, skipped: true, reason: 'install_disabled' }
+    : await ensureCustomSkinLoaderMod(profile)
+
+  return {
+    ok: true,
+    username: minecraftUsername,
+    localSkinPath,
+    configPath,
+    mod
   }
 }
 
@@ -744,25 +1052,32 @@ async function projectMatchesLoader(projectSlug, loader) {
   return project.loaders.map((item) => String(item).toLowerCase()).includes(String(loader).toLowerCase())
 }
 
-async function getModrinthProject(projectId) {
+async function getModrinthProject(projectId, options = {}) {
   const cacheKey = `project:${projectId}`
   const cached = await modrinthCacheGet(cacheKey)
-  if (cached) return cached
+  if (cached && !options.refresh) return cached
   const data = await rateLimitedFetchModrinth(`/project/${projectId}`)
   await modrinthCacheSet(cacheKey, data)
   return data
 }
 
-async function getModrinthVersions(projectId) {
+async function getModrinthVersions(projectId, options = {}) {
   const cacheKey = `versions:${projectId}`
   const cached = await modrinthCacheGet(cacheKey)
-  if (cached) return cached
+  if (cached && !options.refresh) return cached
   const data = await rateLimitedFetchModrinth(`/project/${projectId}/version`)
   await modrinthCacheSet(cacheKey, data)
   return data
 }
 
-
+async function getModrinthVersion(versionId, options = {}) {
+  const cacheKey = `version:${versionId}`
+  const cached = await modrinthCacheGet(cacheKey)
+  if (cached && !options.refresh) return cached
+  const data = await rateLimitedFetchModrinth(`/version/${versionId}`)
+  await modrinthCacheSet(cacheKey, data)
+  return data
+}
 
 function chooseModrinthVersion(versions, gameVersion, loader) {
   let candidates = Array.isArray(versions) ? versions : []
@@ -1330,15 +1645,17 @@ async function installModrinthModpackArchive(filePath, version, project = null) 
 }
 
 async function installModrinthProject(projectId, options = {}) {
-  const { gameVersion = '', loader = '' } = options
+  const { gameVersion = '', loader = '', versionId = '' } = options
   const project = await getModrinthProject(projectId)
   const versions = await getModrinthVersions(projectId)
   const projectType = project.project_type || 'mod'
 
   if (projectType === 'modpack') {
-    const version = chooseModrinthVersion(versions, gameVersion || project.game_versions?.[0], getModrinthLoaderForProjectType(projectType, loader))
+    const version = versionId
+      ? versions.find((item) => item.id === versionId)
+      : chooseModrinthVersion(versions, gameVersion || project.game_versions?.[0], getModrinthLoaderForProjectType(projectType, loader))
     if (!version) {
-      throw new Error('Не удалось найти совместимую версию модпака Modrinth')
+      throw new Error(versionId ? 'Выбранная версия модпака Modrinth не найдена' : 'Не удалось найти совместимую версию модпака Modrinth')
     }
 
     const modpackProjectId = version.project_id || projectId
@@ -1731,14 +2048,18 @@ async function installModrinthProject(projectId, options = {}) {
     throw new Error('В выбранном модпаке Vanilla нет модлоадера для установки модов')
   }
 
-  const version = chooseModrinthVersion(versions, effectiveGameVersion, effectiveLoader)
+  const version = versionId
+    ? versions.find((item) => item.id === versionId)
+    : chooseModrinthVersion(versions, effectiveGameVersion, effectiveLoader)
 
   if (!version) {
     const targetText = [
       effectiveGameVersion,
       effectiveLoader ? effectiveLoader : null
     ].filter(Boolean).join(' / ')
-    throw new Error(`Нет совместимой версии "${project.title}" для ${targetText || 'выбранного модпака'}`)
+    throw new Error(versionId
+      ? `Выбранная версия "${project.title}" не найдена`
+      : `Нет совместимой версии "${project.title}" для ${targetText || 'выбранного модпака'}`)
   }
 
   const installResult = await installModrinthVersion(version, {
@@ -3285,6 +3606,38 @@ async function launchGame(profile, event, launcherProfileNameOverride = '') {
     console.warn('Failed to attach custom skin to session properties:', e && e.message)
   }
 
+  try {
+    const skinIntegration = await prepareCustomSkinLoaderForProfile(profile, {
+      minecraftUsername: profileName,
+      installMod: true
+    })
+
+    if (skinIntegration?.mod?.installed) {
+      broadcastLaunchProgress({
+        message: `CustomSkinLoader установлен: ${skinIntegration.mod.fileName}`,
+        phase: 'preparing'
+      })
+    } else if (skinIntegration?.mod?.existing) {
+      broadcastLaunchProgress({
+        message: `CustomSkinLoader готов: ${skinIntegration.mod.fileName}`,
+        phase: 'preparing'
+      })
+    } else if (skinIntegration?.mod?.reason === 'vanilla') {
+      broadcastLaunchProgress({
+        message: 'CustomSkinLoader пропущен: профиль Vanilla не загружает моды',
+        tone: 'warning',
+        phase: 'preparing'
+      })
+    }
+  } catch (error) {
+    console.warn('Failed to prepare CustomSkinLoader skin integration:', error && error.message)
+    broadcastLaunchProgress({
+      message: `CustomSkinLoader не удалось подготовить: ${error && error.message ? error.message : error}`,
+      tone: 'warning',
+      phase: 'preparing'
+    })
+  }
+
   let versionInfo = {
     number: profile.versionId,
     type: 'release'
@@ -4672,16 +5025,16 @@ ipcMain.handle('launcher:searchModrinth', async (event, query, options) => {
   return await searchModrinth(query, options)
 })
 
-ipcMain.handle('launcher:getModrinthProject', async (event, projectId) => {
-  return await getModrinthProject(projectId)
+ipcMain.handle('launcher:getModrinthProject', async (event, projectId, options) => {
+  return await getModrinthProject(projectId, options)
 })
 
-ipcMain.handle('launcher:getModrinthVersions', async (event, projectId) => {
-  return await getModrinthVersions(projectId)
+ipcMain.handle('launcher:getModrinthVersions', async (event, projectId, options) => {
+  return await getModrinthVersions(projectId, options)
 })
 
-ipcMain.handle('launcher:getModrinthVersion', async (event, versionId) => {
-  return await getModrinthVersion(versionId)
+ipcMain.handle('launcher:getModrinthVersion', async (event, versionId, options) => {
+  return await getModrinthVersion(versionId, options)
 })
 
 ipcMain.handle('launcher:installModrinthProject', async (event, projectId, options) => {

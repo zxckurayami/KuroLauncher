@@ -22,9 +22,9 @@ contextBridge.exposeInMainWorld('launcher', {
   logoutUser: () => ipcRenderer.invoke('launcher:logoutUser'),
   launchProfile: (profileId, launcherProfileName) => ipcRenderer.invoke('launcher:launchProfile', profileId, launcherProfileName),
   searchModrinth: (query, options) => ipcRenderer.invoke('launcher:searchModrinth', query, options),
-  getModrinthProject: (projectId) => ipcRenderer.invoke('launcher:getModrinthProject', projectId),
-  getModrinthVersions: (projectId) => ipcRenderer.invoke('launcher:getModrinthVersions', projectId),
-  getModrinthVersion: (versionId) => ipcRenderer.invoke('launcher:getModrinthVersion', versionId),
+  getModrinthProject: (projectId, options) => ipcRenderer.invoke('launcher:getModrinthProject', projectId, options),
+  getModrinthVersions: (projectId, options) => ipcRenderer.invoke('launcher:getModrinthVersions', projectId, options),
+  getModrinthVersion: (versionId, options) => ipcRenderer.invoke('launcher:getModrinthVersion', versionId, options),
   installModrinthProject: (projectId, options) => ipcRenderer.invoke('launcher:installModrinthProject', projectId, options),
   installModrinthVersion: (versionId, options) => ipcRenderer.invoke('launcher:installModrinthVersion', versionId, options),
   getInstalledModrinthAddons: () => ipcRenderer.invoke('launcher:getInstalledModrinthAddons'),
@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('launcher', {
   deleteModpackDirectory: (modpackKey) => ipcRenderer.invoke('launcher:deleteModpackDirectory', modpackKey),
   openExternal: (targetUrl) => ipcRenderer.invoke('launcher:openExternal', targetUrl),
   // Skin management
-  saveSkin: (profileId, base64Data) => ipcRenderer.invoke('launcher:saveSkin', profileId, base64Data),
+  saveSkin: (profileId, base64Data, options) => ipcRenderer.invoke('launcher:saveSkin', profileId, base64Data, options),
   getSkinUrl: (profileId) => ipcRenderer.invoke('launcher:getSkinUrl', profileId)
 })
 

@@ -9,7 +9,7 @@ const heroBoostArtwork = new URL('./assets/hero-boost.png', import.meta.url).hre
 const newsUpdateArtwork = new URL('./assets/news-update.png', import.meta.url).href
 const newsReleaseArtwork = new URL('./assets/news-release.png', import.meta.url).href
 const newsBoostArtwork = new URL('./assets/news-boost.png', import.meta.url).href
-const APP_VERSION = '0.2.0'
+const APP_VERSION = '0.3.0'
 
 type VersionItem = {
   id: string
@@ -319,6 +319,121 @@ function formatLoaderName(loader?: string, loaderVersion?: string) {
 
 function formatAddonType(type?: string) {
   return addonCategoryLabels[type || ''] || type || 'Дополнение'
+}
+
+const modrinthProjectTypeLabels: Record<string, string> = {
+  mod: 'Мод',
+  modpack: 'Модпак',
+  resourcepack: 'Ресурспак',
+  shader: 'Шейдер'
+}
+
+const modrinthVersionTypeLabels: Record<string, string> = {
+  release: 'Релиз',
+  beta: 'Бета',
+  alpha: 'Альфа'
+}
+
+function formatModrinthProjectType(type?: string) {
+  return modrinthProjectTypeLabels[type || ''] || type || 'Проект'
+}
+
+function formatCompactNumber(value?: number) {
+  const number = typeof value === 'number' && Number.isFinite(value) ? value : 0
+  return new Intl.NumberFormat('ru-RU', { notation: 'compact', maximumFractionDigits: 1 }).format(number)
+}
+
+function formatModrinthDate(value?: string) {
+  if (!value) return 'Дата не указана'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Дата не указана'
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  }).format(date)
+}
+
+function getModrinthProjectId(item: any) {
+  return item?.slug || item?.project_id || item?.id || ''
+}
+
+function getModrinthProjectUrl(project: any) {
+  const slug = project?.slug || project?.project_id || project?.id
+  return slug ? `https://modrinth.com/${project?.project_type || 'mod'}/${slug}` : 'https://modrinth.com'
+}
+
+function formatSideSupport(value?: string) {
+  if (value === 'required') return 'требуется'
+  if (value === 'optional') return 'опционально'
+  if (value === 'unsupported') return 'не поддерживается'
+  return value || 'не указано'
+}
+
+function getVersionPrimaryFile(version: any) {
+  const files = Array.isArray(version?.files) ? version.files : []
+  return files.find((file: any) => file?.primary) || files[0] || null
+}
+
+function formatFileSize(bytes?: number) {
+  if (!bytes || !Number.isFinite(bytes)) return ''
+  const mb = bytes / 1024 / 1024
+  if (mb >= 1) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+function summarizeVersionFile(version: any) {
+  const file = getVersionPrimaryFile(version)
+  if (!file) return 'Файл не указан'
+  const size = formatFileSize(file.size)
+  return [file.filename, size].filter(Boolean).join(' • ')
+}
+
+function normalizeMarkdownText(value?: string) {
+  return String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/<img\b[^>]*>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .split('\n')
+    .map((line) => line.replace(/[*_~`>#]/g, '').trim())
+    .filter((line) => line && !/^https?:\/\//i.test(line) && !/^(src|alt|width|height)=/i.test(line))
+    .join('\n')
+    .trim()
+}
+
+function getProjectBodySummary(project: any) {
+  const body = normalizeMarkdownText(project?.body || project?.description || '')
+  if (!body) return 'Описание отсутствует.'
+  return body.length > 2400 ? `${body.slice(0, 2400).trim()}...` : body
+}
+
+function getProjectGalleryImages(project: any) {
+  const gallery = Array.isArray(project?.gallery) ? project.gallery : []
+  return gallery
+    .map((image: any, index: number) => ({
+      ...image,
+      index,
+      url: image?.url || image?.raw_url || image?.thumbnail_url || '',
+      title: image?.title || `Изображение ${index + 1}`,
+      description: normalizeMarkdownText(image?.description || '').slice(0, 220)
+    }))
+    .filter((image: any) => image.url)
+    .sort((a: any, b: any) => {
+      if (Boolean(a.featured) !== Boolean(b.featured)) return a.featured ? -1 : 1
+      const aOrder = typeof a.ordering === 'number' ? a.ordering : a.index
+      const bOrder = typeof b.ordering === 'number' ? b.ordering : b.index
+      return aOrder - bOrder
+    })
 }
 
 function normalizeAccent(accent?: string): NonNullable<Settings['accent']> {
@@ -673,28 +788,28 @@ function normalizeSettings(settings?: Partial<Settings> | null): Settings {
 
 const newsItems = [
   {
-    title: 'Настройки сохраняются сами',
-    tag: 'Настройки',
+    title: 'Скины ставятся в игру',
+    tag: 'Скины',
     date: 'Сегодня',
-    icon: 'settings' as IconName,
+    icon: 'shirt' as IconName,
     image: newsUpdateArtwork,
-    body: 'Тема, акцент, RAM, Java и fullscreen теперь остаются после перезапуска лаунчера.'
+    body: 'Лаунчер сам готовит CustomSkinLoader, кладёт PNG в профиль и подключает его через модлоадер.'
   },
   {
-    title: 'Главный экран стал живым',
-    tag: 'Интерфейс',
+    title: 'Modrinth стал полноценным',
+    tag: 'Моды',
     date: 'Сегодня',
-    icon: 'spark' as IconName,
+    icon: 'mods' as IconName,
     image: newsReleaseArtwork,
-    body: 'Верхний баннер теперь перелистывает новости, показывает прогресс и ведёт к нужным разделам.'
+    body: 'У проектов появились страницы с версиями, фильтрами, установкой конкретного релиза и изображениями.'
   },
   {
-    title: 'Светлая тема отполирована',
-    tag: 'UI',
+    title: 'Модпаки запускаются стабильнее',
+    tag: 'Запуск',
     date: 'Обновлено',
     icon: 'shield' as IconName,
     image: newsBoostArtwork,
-    body: 'Белый акцент больше не уводит фон в синий, а красный стал глубже и спокойнее.'
+    body: 'Установщик стал аккуратнее с зависимостями, ресурсами и шейдерами, а запуск лаунчера ускорен.'
   }
 ]
 
@@ -735,6 +850,16 @@ function App() {
   const [modrinthTotalHits, setModrinthTotalHits] = useState(0)
   const [modrinthLoading, setModrinthLoading] = useState(false)
   const [modrinthInstalledAddons, setModrinthInstalledAddons] = useState<any[]>([])
+  const [modrinthBrowserView, setModrinthBrowserView] = useState<'search' | 'project'>('search')
+  const [selectedModrinthProject, setSelectedModrinthProject] = useState<any | null>(null)
+  const [selectedModrinthVersions, setSelectedModrinthVersions] = useState<any[]>([])
+  const [selectedModrinthVersionId, setSelectedModrinthVersionId] = useState<string>('')
+  const [modrinthProjectTab, setModrinthProjectTab] = useState<'versions' | 'images' | 'description'>('versions')
+  const [selectedModrinthImageIndex, setSelectedModrinthImageIndex] = useState(0)
+  const [modrinthDetailLoading, setModrinthDetailLoading] = useState(false)
+  const [modrinthVersionGameFilter, setModrinthVersionGameFilter] = useState('')
+  const [modrinthVersionLoaderFilter, setModrinthVersionLoaderFilter] = useState('')
+  const [modrinthVersionReleaseFilter, setModrinthVersionReleaseFilter] = useState('')
   const [selectedModpackTarget, setSelectedModpackTarget] = useState<string>('')
   const [modpackCreateForm, setModpackCreateForm] = useState({
     name: '',
@@ -818,6 +943,42 @@ function App() {
       ? (selectedModpackProfile.loader === 'vanilla' ? '' : selectedModpackProfile.loader)
       : '')
     : modrinthSearchLoader
+  const selectedModrinthProjectType = selectedModrinthProject?.project_type || ''
+  const modrinthVersionGameOptions = useMemo(() => {
+    const values = new Set<string>()
+    selectedModrinthVersions.forEach((version) => {
+      if (Array.isArray(version.game_versions)) {
+        version.game_versions.forEach((item: string) => values.add(item))
+      }
+    })
+    return Array.from(values).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  }, [selectedModrinthVersions])
+  const modrinthVersionLoaderOptions = useMemo(() => {
+    const values = new Set<string>()
+    selectedModrinthVersions.forEach((version) => {
+      if (Array.isArray(version.loaders)) {
+        version.loaders.forEach((item: string) => values.add(item))
+      }
+    })
+    return Array.from(values).sort((a, b) => a.localeCompare(b))
+  }, [selectedModrinthVersions])
+  const filteredModrinthVersions = useMemo(() => {
+    return selectedModrinthVersions.filter((version) => {
+      const matchesGame = !modrinthVersionGameFilter || version.game_versions?.includes(modrinthVersionGameFilter)
+      const matchesLoader = !modrinthVersionLoaderFilter || version.loaders?.includes(modrinthVersionLoaderFilter)
+      const matchesRelease = !modrinthVersionReleaseFilter || version.version_type === modrinthVersionReleaseFilter
+      return matchesGame && matchesLoader && matchesRelease
+    })
+  }, [selectedModrinthVersions, modrinthVersionGameFilter, modrinthVersionLoaderFilter, modrinthVersionReleaseFilter])
+  const selectedModrinthVersion = useMemo(
+    () => selectedModrinthVersions.find((version) => version.id === selectedModrinthVersionId) || filteredModrinthVersions[0] || null,
+    [selectedModrinthVersions, filteredModrinthVersions, selectedModrinthVersionId]
+  )
+  const selectedModrinthProjectImages = useMemo(
+    () => getProjectGalleryImages(selectedModrinthProject),
+    [selectedModrinthProject]
+  )
+  const selectedModrinthImage = selectedModrinthProjectImages[selectedModrinthImageIndex] || selectedModrinthProjectImages[0] || null
   const latestRelease = useMemo(() => versions.find((version) => version.type === 'release') || null, [versions])
   const dashboardNewsItems = newsItems
   const launchCandidate = activeProfile || profiles[0] || null
@@ -1314,6 +1475,77 @@ function App() {
     }
   }
 
+  function pickPreferredModrinthVersion(versionList: any[], gameVersion = '', loader = '', releaseType = '') {
+    return versionList.find((version) => {
+      const matchesGame = !gameVersion || version.game_versions?.includes(gameVersion)
+      const matchesLoader = !loader || version.loaders?.includes(loader)
+      const matchesRelease = !releaseType || version.version_type === releaseType
+      return matchesGame && matchesLoader && matchesRelease
+    }) || versionList[0] || null
+  }
+
+  async function openModrinthProject(item: any, refresh = true) {
+    const projectId = getModrinthProjectId(item)
+    if (!projectId) return
+
+    const sameProject = modrinthBrowserView === 'project' && getModrinthProjectId(selectedModrinthProject) === projectId
+    setModrinthBrowserView('project')
+    setSelectedModrinthProject(item)
+    setSelectedModrinthVersions([])
+    setSelectedModrinthVersionId('')
+    if (!sameProject) {
+      setModrinthProjectTab('versions')
+      setSelectedModrinthImageIndex(0)
+    }
+    setModrinthDetailLoading(true)
+    setStatus('Загрузка проекта Modrinth...')
+
+    try {
+      const [project, rawVersions] = await Promise.all([
+        window.launcher.getModrinthProject(projectId, { refresh }),
+        window.launcher.getModrinthVersions(projectId, { refresh })
+      ])
+      const versionList = Array.isArray(rawVersions)
+        ? [...rawVersions].sort((a, b) => new Date(b.date_published || 0).getTime() - new Date(a.date_published || 0).getTime())
+        : []
+      const projectType = project?.project_type || item?.project_type || modrinthSearchType
+      const targetGame = projectType !== 'modpack' && selectedModpackProfile
+        ? selectedModpackProfile.versionId
+        : effectiveModrinthVersion
+      const targetLoader = projectType === 'mod' && selectedModpackProfile
+        ? (selectedModpackProfile.loader === 'vanilla' ? '' : selectedModpackProfile.loader)
+        : effectiveModrinthLoader
+      const safeGameFilter = targetGame && versionList.some((version) => version.game_versions?.includes(targetGame)) ? targetGame : ''
+      const safeLoaderFilter = targetLoader && versionList.some((version) => version.loaders?.includes(targetLoader)) ? targetLoader : ''
+      const preferred = pickPreferredModrinthVersion(versionList, safeGameFilter, safeLoaderFilter)
+
+      setSelectedModrinthProject(project)
+      setSelectedModrinthVersions(versionList)
+      setModrinthVersionGameFilter(safeGameFilter)
+      setModrinthVersionLoaderFilter(safeLoaderFilter)
+      setModrinthVersionReleaseFilter('')
+      setSelectedModrinthVersionId(preferred?.id || '')
+      setStatus(`Открыт проект: ${project?.title || item?.title || projectId}`)
+    } catch (error: any) {
+      console.error('Modrinth project load error', error)
+      setStatus(`Ошибка загрузки проекта Modrinth: ${error?.message || 'проверьте соединение'}`)
+    } finally {
+      setModrinthDetailLoading(false)
+    }
+  }
+
+  function closeModrinthProject() {
+    setModrinthBrowserView('search')
+    setSelectedModrinthProject(null)
+    setSelectedModrinthVersions([])
+    setSelectedModrinthVersionId('')
+    setModrinthProjectTab('versions')
+    setSelectedModrinthImageIndex(0)
+    setModrinthVersionGameFilter('')
+    setModrinthVersionLoaderFilter('')
+    setModrinthVersionReleaseFilter('')
+  }
+
   async function createCustomModpack() {
     if (!modpackCreateForm.name.trim()) {
       showAlert('Введите название модпака')
@@ -1393,12 +1625,92 @@ function App() {
     }
   }
 
+  async function installSelectedModrinthVersion() {
+    if (!selectedModrinthProject || !selectedModrinthVersion) {
+      showAlert('Выберите версию для установки')
+      return
+    }
+
+    const projectId = getModrinthProjectId(selectedModrinthProject)
+    const projectType = selectedModrinthProject.project_type || 'mod'
+    if (!projectId) return
+    if (projectType !== 'modpack' && !selectedModpackProfile) {
+      showAlert('Выберите модпак, куда установить мод, ресурспак или шейдер')
+      return
+    }
+
+    setIsBusy(true)
+    setStatus(`Установка ${selectedModrinthVersion.version_number || selectedModrinthVersion.name}...`)
+    try {
+      const installOptions = projectType === 'modpack'
+        ? {
+            versionId: selectedModrinthVersion.id,
+            gameVersion: modrinthVersionGameFilter || selectedModrinthVersion.game_versions?.[0],
+            loader: modrinthVersionLoaderFilter || selectedModrinthVersion.loaders?.[0]
+          }
+        : {
+            versionId: selectedModrinthVersion.id,
+            targetProfileId: selectedModpackProfile?.id,
+            gameVersion: selectedModpackProfile?.versionId,
+            loader: projectType === 'mod' && selectedModpackProfile?.loader !== 'vanilla' ? selectedModpackProfile?.loader : undefined
+          }
+
+      const result = await window.launcher.installModrinthProject(projectId, installOptions)
+      if (result?.profile) {
+        setStatus(`Модпак установлен. Профиль "${result.profile.name}" создан.`)
+        await loadState()
+        setSelectedModpackTarget(result.profile.id)
+        setStandaloneExpanded(false)
+        setExpandedModpacks(new Set([getProfileModpackKey(result.profile)]))
+      } else {
+        setStatus(`Установлено: ${selectedModrinthProject.title || projectId} ${selectedModrinthVersion.version_number || ''}`)
+      }
+      await loadInstalledAddons()
+    } catch (error: any) {
+      console.error('Modrinth version install error', error)
+      setStatus(`Ошибка установки версии Modrinth: ${error?.message || 'проверьте лог'}`)
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   useEffect(() => {
     if (activeTab === 'Mods') {
       searchModrinth(1)
       loadInstalledAddons()
     }
   }, [activeTab, modrinthSearchType, effectiveModrinthLoader, effectiveModrinthVersion])
+
+  useEffect(() => {
+    if (modrinthBrowserView !== 'project') return
+    if (filteredModrinthVersions.length === 0) {
+      setSelectedModrinthVersionId('')
+      return
+    }
+    if (!filteredModrinthVersions.some((version) => version.id === selectedModrinthVersionId)) {
+      setSelectedModrinthVersionId(filteredModrinthVersions[0].id)
+    }
+  }, [modrinthBrowserView, filteredModrinthVersions, selectedModrinthVersionId])
+
+  useEffect(() => {
+    if (selectedModrinthImageIndex >= selectedModrinthProjectImages.length && selectedModrinthImageIndex !== 0) {
+      setSelectedModrinthImageIndex(0)
+    }
+  }, [selectedModrinthProjectImages.length, selectedModrinthImageIndex])
+
+  useEffect(() => {
+    if (modrinthBrowserView !== 'project' || !selectedModrinthProject || selectedModrinthProject.project_type === 'modpack' || !selectedModpackProfile) return
+
+    const nextGameFilter = selectedModpackProfile.versionId && modrinthVersionGameOptions.includes(selectedModpackProfile.versionId)
+      ? selectedModpackProfile.versionId
+      : ''
+    const nextLoaderFilter = selectedModrinthProject.project_type === 'mod' && selectedModpackProfile.loader !== 'vanilla' && modrinthVersionLoaderOptions.includes(selectedModpackProfile.loader)
+      ? selectedModpackProfile.loader
+      : ''
+
+    setModrinthVersionGameFilter(nextGameFilter)
+    setModrinthVersionLoaderFilter(nextLoaderFilter)
+  }, [modrinthBrowserView, selectedModrinthProject, selectedModpackProfile, modrinthVersionGameOptions, modrinthVersionLoaderOptions])
 
   async function loadInstalledAddons() {
     try {
@@ -2033,12 +2345,15 @@ function App() {
                               }
                               const updatedProfile = { ...prof, skin: updatedSkin }
 
-                              if (skinDataUrl) {
-                                const res = await (window as any).launcher.saveSkin(selectedProfile, skinDataUrl)
-                                if (!res || !res.ok) {
-                                  showAlert('Не удалось сохранить скин')
-                                  return
-                                }
+                              const res = await (window as any).launcher.saveSkin(selectedProfile, skinDataUrl, {
+                                model: skinModel,
+                                username: launcherProfileName
+                              })
+                              if (!res || !res.ok) {
+                                showAlert('Не удалось сохранить скин')
+                                return
+                              }
+                              if (res.url) {
                                 updatedProfile.skin.url = res.url
                               }
 
@@ -2046,6 +2361,14 @@ function App() {
                                await loadState()
                                setProfileSkinUrl(updatedProfile.skin.url || defaultSteveSkinUrl)
                                setSkinFile(null)
+                              setSkinDataUrl(null)
+                              if (res.customSkinLoader?.ok === false) {
+                                showAlert(`Скин сохранён, но CustomSkinLoader не подключился: ${res.customSkinLoader.error || 'проверьте соединение'}`)
+                              } else if (res.customSkinLoader?.mod?.reason === 'vanilla') {
+                                setStatus('Скин сохранён. CustomSkinLoader подключается для профилей Forge/Fabric/Quilt/NeoForge.')
+                              } else {
+                                setStatus('Скин сохранён и подключён через CustomSkinLoader')
+                              }
                             } catch (e) {
                               console.error(e)
                               showAlert('Ошибка при сохранении скина')
@@ -2060,7 +2383,7 @@ function App() {
                           setSkinDataUrl(null)
                         }}>Отменить</button>
                       </div>
-                      <div className="hint">Используйте 64×64 PNG-скины. Поверните модель мышью в окне просмотра. Если 3D не работает, установите зависимость <code>skinview3d</code>.</div>
+                      <div className="hint">Скины применяются в игре через CustomSkinLoader. Для работы нужен профиль с модлоадером: Forge, Fabric, Quilt или NeoForge; на Vanilla скин останется только в предпросмотре.</div>
                     </div>
                   </div>
                 </div>
@@ -2550,186 +2873,470 @@ function App() {
         )}
 
         {activeTab === 'Mods' && (
-          <section className="modrinth-grid scrollable-content">
+          <section className={`modrinth-grid scrollable-content ${modrinthBrowserView === 'project' ? 'modrinth-project-mode' : ''}`}>
             <div className="panel panel large">
-              <div className="panel-title">Модпаки</div>
-              <div className="modpack-workbench">
-                <div className="modpack-workbench-panel">
-                  <div className="workbench-title">Цель установки</div>
-                  <CustomSelect
-                    options={modpackTargetOptions}
-                    value={selectedModpackTarget}
-                    onChange={(val: string) => setSelectedModpackTarget(val)}
-                    placeholder="Выберите модпак"
-                  />
-                  {selectedModpackProfile ? (
-                    <div className="target-summary">
-                      <div className="target-name">{selectedModpackProfile.name}</div>
-                      <div className="target-chip-row">
-                        <span className="target-chip">{selectedModpackProfile.versionId}</span>
-                        <span className="target-chip">{formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion)}</span>
-                        <span className="target-chip">{formatProfileRam(selectedModpackProfile, settings)}</span>
+              {modrinthBrowserView === 'search' && (
+                <>
+                  <div className="panel-title">Модпаки</div>
+                  <div className="modpack-workbench">
+                    <div className="modpack-workbench-panel">
+                      <div className="workbench-title">Цель установки</div>
+                      <CustomSelect
+                        options={modpackTargetOptions}
+                        value={selectedModpackTarget}
+                        onChange={(val: string) => setSelectedModpackTarget(val)}
+                        placeholder="Выберите модпак"
+                      />
+                      {selectedModpackProfile ? (
+                        <div className="target-summary">
+                          <div className="target-name">{selectedModpackProfile.name}</div>
+                          <div className="target-chip-row">
+                            <span className="target-chip">{selectedModpackProfile.versionId}</span>
+                            <span className="target-chip">{formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion)}</span>
+                            <span className="target-chip">{formatProfileRam(selectedModpackProfile, settings)}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="target-warning">Перед установкой модов, ресурспаков или шейдеров выберите модпак.</div>
+                      )}
+                    </div>
+
+                    <div className="modpack-workbench-panel">
+                      <div className="workbench-title">Создать свой модпак</div>
+                      <div className="modpack-create-grid">
+                        <label>
+                          Название
+                          <input
+                            value={modpackCreateForm.name}
+                            onChange={(e) => setModpackCreateForm((prev) => ({ ...prev, name: e.target.value }))}
+                            placeholder="Например Kuro Survival"
+                          />
+                        </label>
+                        <label>
+                          Версия Minecraft
+                          <CustomSelect
+                            options={[{ value: '', label: 'Выберите версию' }, ...versionSelectOptions]}
+                            value={modpackCreateForm.versionId}
+                            onChange={(val: string) => setModpackCreateForm((prev) => ({ ...prev, versionId: val, loaderVersion: '' }))}
+                            placeholder="Версия"
+                          />
+                        </label>
+                        <label>
+                          Модлоадер
+                          <CustomSelect
+                            options={[
+                              { value: 'forge', label: 'Forge' },
+                              { value: 'fabric', label: 'Fabric' },
+                              { value: 'quilt', label: 'Quilt' },
+                              { value: 'neoforge', label: 'NeoForge' },
+                              { value: 'vanilla', label: 'Vanilla' }
+                            ]}
+                            value={modpackCreateForm.loader}
+                            onChange={(val: Profile['loader']) => setModpackCreateForm((prev) => ({ ...prev, loader: val, loaderVersion: '' }))}
+                            placeholder="Модлоадер"
+                          />
+                        </label>
+                        <label>
+                          Версия модлоадера
+                          <CustomSelect
+                            options={[
+                              { value: '', label: modpackCreateForm.loader === 'vanilla' ? 'Не требуется' : modpackCreateLoaderLoading ? 'Загрузка...' : 'Выберите версию' },
+                              ...modpackCreateLoaderVersions
+                            ]}
+                            value={modpackCreateForm.loaderVersion}
+                            onChange={(val: string) => setModpackCreateForm((prev) => ({ ...prev, loaderVersion: val }))}
+                            placeholder="Версия модлоадера"
+                            disabled={modpackCreateForm.loader === 'vanilla' || modpackCreateLoaderLoading}
+                          />
+                        </label>
+                        <button className="button" onClick={createCustomModpack} disabled={modpackCreateLoading || modpackCreateLoaderLoading}>
+                          Создать модпак
+                        </button>
                       </div>
                     </div>
-                  ) : (
-                    <div className="target-warning">Перед установкой модов, ресурспаков или шейдеров выберите модпак.</div>
-                  )}
-                </div>
+                  </div>
+                </>
+              )}
 
-                <div className="modpack-workbench-panel">
-                  <div className="workbench-title">Создать свой модпак</div>
-                  <div className="modpack-create-grid">
+              {modrinthBrowserView === 'search' && <div className="panel-title" style={{ marginTop: 18 }}>Браузер Modrinth</div>}
+              {modrinthBrowserView === 'search' ? (
+                <>
+                  {selectedModpackProfile && isTargetedModrinthType && (
+                    <div className="modrinth-filter-note">
+                      Поиск дополнений идёт под выбранный модпак: {selectedModpackProfile.versionId} • {formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion)}
+                    </div>
+                  )}
+                  <div className="form-grid">
                     <label>
-                      Название
-                      <input
-                        value={modpackCreateForm.name}
-                        onChange={(e) => setModpackCreateForm((prev) => ({ ...prev, name: e.target.value }))}
-                        placeholder="Например Kuro Survival"
-                      />
+                      Поиск
+                      <input value={modrinthQuery} onChange={(e) => setModrinthQuery(e.target.value)} placeholder="Имя мода, текст или ID" />
                     </label>
                     <label>
                       Версия Minecraft
-                      <CustomSelect
-                        options={[{ value: '', label: 'Выберите версию' }, ...versionSelectOptions]}
-                        value={modpackCreateForm.versionId}
-                        onChange={(val: string) => setModpackCreateForm((prev) => ({ ...prev, versionId: val, loaderVersion: '' }))}
-                        placeholder="Версия"
+                      <input
+                        value={effectiveModrinthVersion}
+                        onChange={(e) => setModrinthSearchVersion(e.target.value)}
+                        placeholder="Например 1.20.1"
+                        disabled={Boolean(selectedModpackProfile && isTargetedModrinthType)}
                       />
                     </label>
                     <label>
-                      Модлоадер
+                      Загрузчик
                       <CustomSelect
                         options={[
-                          { value: 'forge', label: 'Forge' },
+                          { value: '', label: 'Любой' },
                           { value: 'fabric', label: 'Fabric' },
+                          { value: 'forge', label: 'Forge' },
                           { value: 'quilt', label: 'Quilt' },
-                          { value: 'neoforge', label: 'NeoForge' },
-                          { value: 'vanilla', label: 'Vanilla' }
+                          { value: 'neoforge', label: 'NeoForge' }
                         ]}
-                        value={modpackCreateForm.loader}
-                        onChange={(val: Profile['loader']) => setModpackCreateForm((prev) => ({ ...prev, loader: val, loaderVersion: '' }))}
-                        placeholder="Модлоадер"
+                        value={effectiveModrinthLoader}
+                        onChange={(val: string) => setModrinthSearchLoader(val)}
+                        placeholder="Загрузчик"
+                        disabled={Boolean(selectedModpackProfile && isTargetedModrinthType)}
                       />
                     </label>
                     <label>
-                      Версия модлоадера
+                      Тип контента
                       <CustomSelect
                         options={[
-                          { value: '', label: modpackCreateForm.loader === 'vanilla' ? 'Не требуется' : modpackCreateLoaderLoading ? 'Загрузка...' : 'Выберите версию' },
-                          ...modpackCreateLoaderVersions
+                          { value: 'all', label: 'Все' },
+                          { value: 'mod', label: 'Моды' },
+                          { value: 'modpack', label: 'Модпаки' },
+                          { value: 'resourcepack', label: 'Ресурсы' },
+                          { value: 'shader', label: 'Шейдеры' }
                         ]}
-                        value={modpackCreateForm.loaderVersion}
-                        onChange={(val: string) => setModpackCreateForm((prev) => ({ ...prev, loaderVersion: val }))}
-                        placeholder="Версия модлоадера"
-                        disabled={modpackCreateForm.loader === 'vanilla' || modpackCreateLoaderLoading}
+                        value={modrinthSearchType}
+                        onChange={(val: string) => setModrinthSearchType(val)}
+                        placeholder="Тип"
                       />
                     </label>
-                    <button className="button" onClick={createCustomModpack} disabled={modpackCreateLoading || modpackCreateLoaderLoading}>
-                      Создать модпак
-                    </button>
+                    <button className="button" onClick={() => searchModrinth(1)} disabled={modrinthLoading}>Искать</button>
                   </div>
-                </div>
-              </div>
 
-              <div className="panel-title" style={{ marginTop: 18 }}>Браузер Modrinth</div>
-              {selectedModpackProfile && isTargetedModrinthType && (
-                <div className="modrinth-filter-note">
-                  Поиск дополнений идёт под выбранный модпак: {selectedModpackProfile.versionId} • {formatLoaderName(selectedModpackProfile.loader, selectedModpackProfile.loaderVersion)}
-                </div>
-              )}
-              <div className="form-grid">
-                <label>
-                  Поиск
-                  <input value={modrinthQuery} onChange={(e) => setModrinthQuery(e.target.value)} placeholder="Имя мода, текст или ID" />
-                </label>
-                <label>
-                  Версия Minecraft
-                  <input
-                    value={effectiveModrinthVersion}
-                    onChange={(e) => setModrinthSearchVersion(e.target.value)}
-                    placeholder="Например 1.20.1"
-                    disabled={Boolean(selectedModpackProfile && isTargetedModrinthType)}
-                  />
-                </label>
-                <label>
-                  Загрузчик
-                  <CustomSelect
-                    options={[
-                      { value: '', label: 'Любой' },
-                      { value: 'fabric', label: 'Fabric' },
-                      { value: 'forge', label: 'Forge' },
-                      { value: 'quilt', label: 'Quilt' },
-                      { value: 'neoforge', label: 'NeoForge' }
-                    ]}
-                    value={effectiveModrinthLoader}
-                    onChange={(val: string) => setModrinthSearchLoader(val)}
-                    placeholder="Загрузчик"
-                    disabled={Boolean(selectedModpackProfile && isTargetedModrinthType)}
-                  />
-                </label>
-                <label>
-                  Тип контента
-                  <CustomSelect
-                    options={[
-                      { value: 'all', label: 'Все' },
-                      { value: 'mod', label: 'Моды' },
-                      { value: 'modpack', label: 'Модпаки' },
-                      { value: 'resourcepack', label: 'Ресурсы' },
-                      { value: 'shader', label: 'Шейдеры' }
-                    ]}
-                    value={modrinthSearchType}
-                    onChange={(val: string) => setModrinthSearchType(val)}
-                    placeholder="Тип"
-                  />
-                </label>
-                <button className="button" onClick={() => searchModrinth(1)} disabled={modrinthLoading}>Искать</button>
-              </div>
+                  <div className="panel-title" style={{ marginTop: 18 }}>
+                    Результаты поиска {modrinthTotalHits ? `(${modrinthTotalHits} найдено)` : ''}
+                  </div>
+                  <div className="search-results grid">
+                    {modrinthLoading && <div className="hint">Загрузка результатов...</div>}
+                    {!modrinthLoading && modrinthSearchResults.length === 0 && <div className="hint">Нет результатов. Попробуйте другой запрос или смените фильтры.</div>}
+                    {modrinthSearchResults.map((item) => (
+                      <article
+                        key={item.id}
+                        className="search-card modrinth-card"
+                        tabIndex={0}
+                        onClick={() => openModrinthProject(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            openModrinthProject(item)
+                          }
+                        }}
+                      >
+                        <div className="search-card-header">
+                          <img src={item.icon_url || ''} alt={item.title || item.name} className="search-card-icon" />
+                          <div>
+                            <div className="search-title">{item.title || item.name}</div>
+                            <div className="search-meta">{formatModrinthProjectType(item.project_type)} • {item.primary_category || item.loader_type || 'Без категории'}</div>
+                          </div>
+                        </div>
+                        <div className="search-body">
+                          <p>{item.description ? item.description.slice(0, 160) : 'Описание отсутствует.'}</p>
+                          <div className="search-tags">
+                            {Array.isArray(item.categories) && item.categories.slice(0, 4).map((category: any) => (
+                              <span key={category} className="tag">{category}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="search-footer">
+                          <div>
+                            <span className="small-text">Загрузки: {formatCompactNumber(item.downloads)}</span>
+                            <span className="small-text">   Версий: {item.versions?.length ?? 0}</span>
+                          </div>
+                          <div className="search-footer-actions">
+                            <button
+                              className="outline-button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                openModrinthProject(item)
+                              }}
+                              disabled={modrinthLoading}
+                            >
+                              Подробнее
+                            </button>
+                            <button
+                              className="outline-button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                installModrinthProject(item)
+                              }}
+                              disabled={modrinthLoading || isBusy}
+                            >
+                              {item.project_type === 'modpack' ? 'Скачать модпак' : 'Скачать'}
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
 
-              <div className="panel-title" style={{ marginTop: 18 }}>
-                Результаты поиска {modrinthTotalHits ? `(${modrinthTotalHits} найдено)` : ''}
-              </div>
-              <div className="search-results grid">
-                {modrinthLoading && <div className="hint">Загрузка результатов...</div>}
-                {!modrinthLoading && modrinthSearchResults.length === 0 && <div className="hint">Нет результатов. Попробуйте другой запрос или смените фильтры.</div>}
-                {modrinthSearchResults.map((item) => (
-                  <article key={item.id} className="search-card modrinth-card">
-                    <div className="search-card-header">
-                      <img src={item.icon_url || ''} alt={item.title || item.name} className="search-card-icon" />
-                      <div>
-                        <div className="search-title">{item.title || item.name}</div>
-                        <div className="search-meta">{item.project_type} • {item.primary_category || item.loader_type || 'Без категории'}</div>
-                      </div>
+                  {modrinthTotalHits > 20 && (
+                    <div className="pagination" style={{ marginTop: 16 }}>
+                      <button className="pagination-btn" disabled={modrinthPage <= 1 || modrinthLoading} onClick={() => searchModrinth(modrinthPage - 1)}>‹ Назад</button>
+                      <div className="pagination-info">Страница {modrinthPage} из {Math.ceil(modrinthTotalHits / 20)}</div>
+                      <button className="pagination-btn" disabled={modrinthPage >= Math.ceil(modrinthTotalHits / 20) || modrinthLoading} onClick={() => searchModrinth(modrinthPage + 1)}>Вперёд ›</button>
                     </div>
-                    <div className="search-body">
-                      <p>{item.description ? item.description.slice(0, 160) : 'Описание отсутствует.'}</p>
-                      <div className="search-tags">
-                        {Array.isArray(item.categories) && item.categories.slice(0, 4).map((category: any) => (
-                          <span key={category} className="tag">{category}</span>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="search-footer">
-                      <div>
-                        <span className="small-text">Загрузки: {item.downloads ?? 0}</span>
-                        <span className="small-text">   Версий: {item.versions?.length ?? 0}</span>
-                      </div>
-                      <button className="outline-button" onClick={() => installModrinthProject(item)} disabled={modrinthLoading || isBusy}>
-                        {item.project_type === 'modpack' ? 'Скачать модпак' : 'Скачать'}
+                  )}
+                </>
+              ) : (
+                <div className="modrinth-project-view">
+                  <div className="modrinth-project-toolbar">
+                    <button className="outline-button" onClick={closeModrinthProject}>← К поиску</button>
+                    <div className="modrinth-project-toolbar-actions">
+                      <button className="outline-button" onClick={() => selectedModrinthProject && openModrinthProject(selectedModrinthProject, true)} disabled={modrinthDetailLoading}>
+                        Обновить
+                      </button>
+                      <button className="outline-button" onClick={() => selectedModrinthProject && window.launcher.openExternal(getModrinthProjectUrl(selectedModrinthProject))}>
+                        Modrinth
                       </button>
                     </div>
-                  </article>
-                ))}
-              </div>
+                  </div>
 
-              {modrinthTotalHits > 20 && (
-                <div className="pagination" style={{ marginTop: 16 }}>
-                  <button className="pagination-btn" disabled={modrinthPage <= 1 || modrinthLoading} onClick={() => searchModrinth(modrinthPage - 1)}>‹ Назад</button>
-                  <div className="pagination-info">Страница {modrinthPage} из {Math.ceil(modrinthTotalHits / 20)}</div>
-                  <button className="pagination-btn" disabled={modrinthPage >= Math.ceil(modrinthTotalHits / 20) || modrinthLoading} onClick={() => searchModrinth(modrinthPage + 1)}>Вперёд ›</button>
+                  {modrinthDetailLoading && <div className="hint">Загрузка проекта и версий...</div>}
+
+                  {selectedModrinthProject && (
+                    <>
+                      <div className="modrinth-project-hero">
+                        <img src={selectedModrinthProject.icon_url || ''} alt={selectedModrinthProject.title || selectedModrinthProject.name} className="modrinth-project-icon" />
+                        <div className="modrinth-project-copy">
+                          <div className="modrinth-project-kicker">
+                            {formatModrinthProjectType(selectedModrinthProject.project_type)} • {selectedModrinthProject.slug || selectedModrinthProject.id}
+                          </div>
+                          <h2>{selectedModrinthProject.title || selectedModrinthProject.name}</h2>
+                          <p>{selectedModrinthProject.description || 'Описание отсутствует.'}</p>
+                          <div className="search-tags">
+                            {Array.isArray(selectedModrinthProject.categories) && selectedModrinthProject.categories.slice(0, 8).map((category: string) => (
+                              <span key={category} className="tag">{category}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="modrinth-project-metrics">
+                          <span><strong>{formatCompactNumber(selectedModrinthProject.downloads)}</strong> загрузок</span>
+                          <span><strong>{formatCompactNumber(selectedModrinthProject.followers)}</strong> подписчиков</span>
+                          <span><strong>{selectedModrinthVersions.length}</strong> версий</span>
+                          <span>обновлено <strong>{formatModrinthDate(selectedModrinthProject.updated || selectedModrinthProject.date_modified)}</strong></span>
+                        </div>
+                      </div>
+
+                      <div className="modrinth-project-tabs" role="tablist" aria-label="Разделы проекта">
+                        <button
+                          type="button"
+                          className={modrinthProjectTab === 'versions' ? 'active' : ''}
+                          onClick={() => setModrinthProjectTab('versions')}
+                        >
+                          Версии <span>{selectedModrinthVersions.length}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={modrinthProjectTab === 'images' ? 'active' : ''}
+                          onClick={() => setModrinthProjectTab('images')}
+                        >
+                          Изображения <span>{selectedModrinthProjectImages.length}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={modrinthProjectTab === 'description' ? 'active' : ''}
+                          onClick={() => setModrinthProjectTab('description')}
+                        >
+                          Описание
+                        </button>
+                      </div>
+
+                      <div className="modrinth-project-layout">
+                        <div className={`modrinth-project-content-panel modrinth-project-content-${modrinthProjectTab}`}>
+                          {modrinthProjectTab === 'versions' && (
+                            <>
+                              <div className="modrinth-section-row">
+                                <div className="modrinth-section-title">Версии</div>
+                                <span>{filteredModrinthVersions.length} из {selectedModrinthVersions.length}</span>
+                              </div>
+                              <div className="modrinth-version-controls">
+                                <CustomSelect
+                                  options={[{ value: '', label: 'Все версии Minecraft' }, ...modrinthVersionGameOptions.map((item) => ({ value: item, label: item }))]}
+                                  value={modrinthVersionGameFilter}
+                                  onChange={(val: string) => setModrinthVersionGameFilter(val)}
+                                  placeholder="Minecraft"
+                                />
+                                <CustomSelect
+                                  options={[{ value: '', label: 'Все загрузчики' }, ...modrinthVersionLoaderOptions.map((item) => ({ value: item, label: item }))]}
+                                  value={modrinthVersionLoaderFilter}
+                                  onChange={(val: string) => setModrinthVersionLoaderFilter(val)}
+                                  placeholder="Загрузчик"
+                                />
+                                <CustomSelect
+                                  options={[
+                                    { value: '', label: 'Любой релиз' },
+                                    { value: 'release', label: 'Релиз' },
+                                    { value: 'beta', label: 'Бета' },
+                                    { value: 'alpha', label: 'Альфа' }
+                                  ]}
+                                  value={modrinthVersionReleaseFilter}
+                                  onChange={(val: string) => setModrinthVersionReleaseFilter(val)}
+                                  placeholder="Тип"
+                                />
+                              </div>
+
+                              <div className="modrinth-version-list">
+                                {filteredModrinthVersions.length === 0 && <div className="hint">Нет версий под выбранные фильтры.</div>}
+                                {filteredModrinthVersions.map((version) => {
+                                  const selected = selectedModrinthVersion?.id === version.id
+                                  return (
+                                    <button
+                                      key={version.id}
+                                      type="button"
+                                      className={`modrinth-version-row ${selected ? 'selected' : ''}`}
+                                      onClick={() => setSelectedModrinthVersionId(version.id)}
+                                    >
+                                      <span className="modrinth-version-main">
+                                        <strong>{version.name || version.version_number}</strong>
+                                        <span>{version.version_number} • {modrinthVersionTypeLabels[version.version_type] || version.version_type || 'версия'} • {formatModrinthDate(version.date_published)}</span>
+                                      </span>
+                                      <span className="modrinth-version-tags">
+                                        {Array.isArray(version.game_versions) && version.game_versions.slice(0, 2).map((gameVersion: string) => (
+                                          <span key={gameVersion}>{gameVersion}</span>
+                                        ))}
+                                        {Array.isArray(version.loaders) && version.loaders.slice(0, 1).map((loaderName: string) => (
+                                          <span key={loaderName}>{loaderName}</span>
+                                        ))}
+                                      </span>
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </>
+                          )}
+
+                          {modrinthProjectTab === 'images' && (
+                            <>
+                              <div className="modrinth-section-row">
+                                <div className="modrinth-section-title">Изображения проекта</div>
+                                <span>{selectedModrinthProjectImages.length || 'нет изображений'}</span>
+                              </div>
+                              {selectedModrinthProjectImages.length === 0 ? (
+                                <div className="hint">У этого проекта пока нет изображений на Modrinth.</div>
+                              ) : (
+                                <div className="modrinth-gallery">
+                                  {selectedModrinthImage && (
+                                    <div className="modrinth-gallery-stage">
+                                      <img src={selectedModrinthImage.url} alt={selectedModrinthImage.title} />
+                                      <div className="modrinth-gallery-caption">
+                                        <div>
+                                          <strong>{selectedModrinthImage.title}</strong>
+                                          {selectedModrinthImage.description && <span>{selectedModrinthImage.description}</span>}
+                                        </div>
+                                        <button
+                                          className="outline-button"
+                                          onClick={() => window.launcher.openExternal(selectedModrinthImage.raw_url || selectedModrinthImage.url)}
+                                        >
+                                          Открыть
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div className="modrinth-gallery-thumbs">
+                                    {selectedModrinthProjectImages.map((image: any, index: number) => (
+                                      <button
+                                        key={`${image.url}-${index}`}
+                                        type="button"
+                                        className={index === selectedModrinthImageIndex ? 'active' : ''}
+                                        onClick={() => setSelectedModrinthImageIndex(index)}
+                                      >
+                                        <img src={image.url} alt={image.title} />
+                                        <span>{image.title}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          {modrinthProjectTab === 'description' && (
+                            <>
+                              <div className="modrinth-section-row">
+                                <div className="modrinth-section-title">Описание проекта</div>
+                                <span>Modrinth</span>
+                              </div>
+                              <div className="modrinth-markdown-text modrinth-description-panel-text">
+                                {getProjectBodySummary(selectedModrinthProject).split('\n').filter(Boolean).map((line, index) => (
+                                  <p key={`${line.slice(0, 18)}-${index}`}>{line}</p>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                        </div>
+
+                        <aside className="modrinth-install-panel">
+                          {selectedModrinthProjectType !== 'modpack' && (
+                            <div className="modrinth-install-target">
+                              <span>Цель установки</span>
+                              <CustomSelect
+                                options={modpackTargetOptions}
+                                value={selectedModpackTarget}
+                                onChange={(val: string) => setSelectedModpackTarget(val)}
+                                placeholder="Выберите модпак"
+                              />
+                            </div>
+                          )}
+
+                          {selectedModrinthProjectType !== 'modpack' && !selectedModpackProfile && (
+                            <div className="target-warning">Выберите модпак в блоке выше, чтобы установить выбранную версию.</div>
+                          )}
+
+                          <div className="modrinth-install-bar">
+                            <div>
+                              <span>Выбрано</span>
+                              <strong>{selectedModrinthVersion ? selectedModrinthVersion.version_number || selectedModrinthVersion.name : 'нет версии'}</strong>
+                            </div>
+                            <button className="button" onClick={installSelectedModrinthVersion} disabled={!selectedModrinthVersion || isBusy || modrinthDetailLoading}>
+                              {selectedModrinthProjectType === 'modpack' ? 'Установить модпак' : 'Установить версию'}
+                            </button>
+                          </div>
+
+                          {selectedModrinthVersion && (
+                            <div className="modrinth-version-detail">
+                              <div><span>Файл</span><strong>{summarizeVersionFile(selectedModrinthVersion)}</strong></div>
+                              <div><span>Загрузки версии</span><strong>{formatCompactNumber(selectedModrinthVersion.downloads)}</strong></div>
+                              <div><span>Зависимости</span><strong>{selectedModrinthVersion.dependencies?.length || 0}</strong></div>
+                              {selectedModrinthVersion.changelog && (
+                                <p>{normalizeMarkdownText(selectedModrinthVersion.changelog).slice(0, 520)}</p>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="modrinth-project-facts">
+                            <div><span>Клиент</span><strong>{formatSideSupport(selectedModrinthProject.client_side)}</strong></div>
+                            <div><span>Сервер</span><strong>{formatSideSupport(selectedModrinthProject.server_side)}</strong></div>
+                            <div><span>Лицензия</span><strong>{selectedModrinthProject.license?.name || selectedModrinthProject.license?.id || 'не указана'}</strong></div>
+                            <div><span>Создано</span><strong>{formatModrinthDate(selectedModrinthProject.published || selectedModrinthProject.date_created)}</strong></div>
+                          </div>
+
+                          <div className="modrinth-link-row">
+                            {selectedModrinthProject.source_url && <button className="outline-button" onClick={() => window.launcher.openExternal(selectedModrinthProject.source_url)}>Source</button>}
+                            {selectedModrinthProject.issues_url && <button className="outline-button" onClick={() => window.launcher.openExternal(selectedModrinthProject.issues_url)}>Issues</button>}
+                            {selectedModrinthProject.wiki_url && <button className="outline-button" onClick={() => window.launcher.openExternal(selectedModrinthProject.wiki_url)}>Wiki</button>}
+                            {selectedModrinthProject.discord_url && <button className="outline-button" onClick={() => window.launcher.openExternal(selectedModrinthProject.discord_url)}>Discord</button>}
+                          </div>
+                        </aside>
+                      </div>
+
+                    </>
+                  )}
                 </div>
               )}
             </div>
 
+            {modrinthBrowserView === 'search' && (
             <div className="panel panel small">
               <div className="panel-title">Установленные дополнения</div>
               <div className="installed-list">
@@ -2878,6 +3485,7 @@ function App() {
                 })}
               </div>
             </div>
+            )}
           </section>
         )}
 
