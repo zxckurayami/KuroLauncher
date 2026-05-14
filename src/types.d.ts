@@ -29,11 +29,13 @@ declare global {
       getModrinthVersion: (versionId: string, options?: any) => Promise<any>
       installModrinthProject: (projectId: string, options?: any) => Promise<any>
       installModrinthVersion: (versionId: string, options?: any) => Promise<any>
+      installCurseForgeModpack: (projectId: string | number, options?: any) => Promise<any>
       getInstalledModrinthAddons: () => Promise<any[]>
       toggleInstalledAddon: (type: string, name: string, enabled: boolean, addonPath?: string) => Promise<any>
       deleteInstalledAddon: (type: string, name: string, addonPath?: string) => Promise<any>
       deleteModpackDirectory: (modpackKey: string) => Promise<boolean>
       openExternal: (targetUrl: string) => Promise<{ ok: boolean; error?: string }>
+      openGameFolder: () => Promise<{ ok: boolean; path?: string; error?: string }>
       saveSkin: (profileId: string, base64Data?: string | null, options?: { model?: 'classic' | 'slim'; username?: string }) => Promise<any>
       getSkinUrl: (profileId: string) => Promise<string | null>
     }

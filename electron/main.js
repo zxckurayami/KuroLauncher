@@ -19,6 +19,8 @@ const execFileAsync = promisify(execFile)
 let userData, minecraftPath, versionsPath, profilesPath, settingsPath, authPath, modsPath, shaderpacksPath, resourcepacksPath, modpacksPath, modrinthCachePath
 const defaultLauncherSettings = {
   theme: 'dark',
+  language: 'ru',
+  fontStyle: 'classic',
   javaPath: 'java',
   ram: 'auto',
   accent: 'red',
@@ -41,6 +43,19 @@ const CUSTOM_SKIN_LOADER_DATA_DIR = 'CustomSkinLoader'
 const CUSTOM_SKIN_LOADER_MARKER_FILE = 'kuro-launcher.json'
 const CUSTOM_SKIN_LOADER_LOCAL_SKIN = 'LocalSkin/skins/{USERNAME}.png'
 const MOD_LOADER_TYPES = new Set(['forge', 'fabric', 'quilt', 'neoforge'])
+const CURSEFORGE_WEB_API_BASE = 'https://www.curseforge.com/api/v1'
+const CURSEFORGE_BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+const CURSEFORGE_FILE_FALLBACKS = {
+  '930207:5650506': {
+    id: 5650506,
+    projectId: 930207,
+    displayName: 'Noisium 2.3.0 (1.20-1.20.1)',
+    fileName: 'noisium-forge-2.3.0+mc1.20-1.20.1.jar',
+    gameVersions: ['1.20.1', '1.20', 'Forge', 'NeoForge'],
+    releaseType: 1,
+    downloadUrl: 'https://edge.forgecdn.net/files/5650/506/noisium-forge-2.3.0+mc1.20-1.20.1.jar'
+  }
+}
 
 function broadcastLaunchProgress(payload = {}) {
   try {
@@ -157,6 +172,18 @@ ipcMain.handle('launcher:openExternal', async (_event, targetUrl) => {
   } catch (e) {
     console.error('Failed to open external link:', e && e.message)
     return { ok: false, error: e && e.message }
+  }
+})
+
+ipcMain.handle('launcher:openGameFolder', async () => {
+  try {
+    await fs.mkdir(minecraftPath, { recursive: true })
+    const error = await shell.openPath(minecraftPath)
+    if (error) return { ok: false, error, path: minecraftPath }
+    return { ok: true, path: minecraftPath }
+  } catch (e) {
+    console.error('Failed to open game folder:', e && e.message)
+    return { ok: false, error: e && e.message, path: minecraftPath }
   }
 })
 
@@ -372,8 +399,12 @@ async function summarizeLatestKuroLaunchLog(gameDirectory) {
   }
 }
 
-async function downloadFile(url, destination) {
-  const response = await axios.get(url, { responseType: 'stream', timeout: 120000 })
+async function downloadFile(url, destination, options = {}) {
+  const response = await axios.get(url, {
+    responseType: 'stream',
+    timeout: 120000,
+    headers: options.headers || undefined
+  })
   if (response.status !== 200) {
     throw new Error(`Не удалось скачать ${url}: HTTP ${response.status}`)
   }
@@ -386,6 +417,12 @@ async function downloadFile(url, destination) {
     writer.destroy()
     throw error
   }
+}
+
+function sendInstallProgress(event, message, progress = null) {
+  try {
+    event?.sender.send('launcher:installProgress', progress ? { message, progress } : { message })
+  } catch {}
 }
 
 function getProfileSkinFileName(profileId) {
@@ -1162,7 +1199,9 @@ async function readModpackIndexData(modpackPath) {
 
   const candidates = [
     path.join(modpackPath, 'modrinth.index.json'),
-    path.join(modpackPath, 'overrides', 'modrinth.index.json')
+    path.join(modpackPath, 'manifest.json'),
+    path.join(modpackPath, 'overrides', 'modrinth.index.json'),
+    path.join(modpackPath, 'overrides', 'manifest.json')
   ]
 
   try {
@@ -1170,7 +1209,9 @@ async function readModpackIndexData(modpackPath) {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       candidates.push(path.join(modpackPath, entry.name, 'modrinth.index.json'))
+      candidates.push(path.join(modpackPath, entry.name, 'manifest.json'))
       candidates.push(path.join(modpackPath, entry.name, 'overrides', 'modrinth.index.json'))
+      candidates.push(path.join(modpackPath, entry.name, 'overrides', 'manifest.json'))
     }
   } catch {}
 
@@ -1398,6 +1439,366 @@ async function createCustomModpack(input = {}) {
   await saveJson(path.join(modpacksPath, `${modpackKey}.meta.json`), meta)
 
   return { success: true, profile }
+}
+
+function normalizeCurseForgeId(value, label) {
+  const number = Number.parseInt(String(value || ''), 10)
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error(`Некорректный ${label} CurseForge`)
+  }
+  return number
+}
+
+function getCurseForgeRequestHeaders(options = {}) {
+  return {
+    'User-Agent': CURSEFORGE_BROWSER_USER_AGENT,
+    Accept: options.accept || 'application/json, text/plain, */*',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    Referer: options.referer || 'https://www.curseforge.com/',
+    Origin: 'https://www.curseforge.com'
+  }
+}
+
+async function fetchCurseForgeWebApi(pathSuffix, params = {}) {
+  const response = await axios.get(`${CURSEFORGE_WEB_API_BASE}${pathSuffix}`, {
+    params,
+    timeout: 30000,
+    headers: getCurseForgeRequestHeaders({ accept: 'application/json, text/plain, */*' })
+  })
+  return response.data?.data ?? response.data
+}
+
+async function getCurseForgeProjectFiles(projectId, options = {}) {
+  const data = await fetchCurseForgeWebApi(`/mods/${projectId}/files`, {
+    pageIndex: options.pageIndex ?? 0,
+    pageSize: options.pageSize ?? 20,
+    sort: options.sort || 'dateCreated',
+    sortDescending: options.sortDescending ?? true,
+    removeAlphas: options.removeAlphas ?? true
+  })
+  return Array.isArray(data) ? data : []
+}
+
+async function getCurseForgeFile(projectId, fileId) {
+  const data = await fetchCurseForgeWebApi(`/mods/${projectId}/files/${fileId}`)
+  if (!data || !data.id) {
+    throw new Error(`Файл CurseForge ${projectId}/${fileId} не найден`)
+  }
+  return data
+}
+
+function getCurseForgeDownloadUrl(projectId, fileId) {
+  return `${CURSEFORGE_WEB_API_BASE}/mods/${projectId}/files/${fileId}/download`
+}
+
+function getCurseForgeFilePageUrl(projectId, fileId) {
+  return `https://www.curseforge.com/minecraft/mc-mods/${projectId}/files/${fileId}`
+}
+
+async function downloadCurseForgeFile(projectId, fileId, destination) {
+  await downloadFile(getCurseForgeDownloadUrl(projectId, fileId), destination, {
+    headers: getCurseForgeRequestHeaders({
+      accept: 'application/octet-stream,*/*',
+      referer: getCurseForgeFilePageUrl(projectId, fileId)
+    })
+  })
+}
+
+function getManualCurseForgeFileFallback(projectId, fileId) {
+  const fallback = CURSEFORGE_FILE_FALLBACKS[`${projectId}:${fileId}`]
+  return fallback ? { ...fallback } : null
+}
+
+function pickCurseForgeModpackFile(files, options = {}) {
+  const gameVersion = String(options.gameVersion || '').trim()
+  const loader = String(options.loader || '').trim().toLowerCase()
+  let candidates = Array.isArray(files) ? files.filter((file) => file && file.id) : []
+
+  if (gameVersion) {
+    candidates = candidates.filter((file) => Array.isArray(file.gameVersions) && file.gameVersions.includes(gameVersion))
+  }
+  if (loader) {
+    candidates = candidates.filter((file) => Array.isArray(file.gameVersions) && file.gameVersions.some((item) => String(item).toLowerCase() === loader))
+  }
+
+  candidates.sort((a, b) => {
+    const releaseDelta = (a.releaseType === 1 ? 0 : 1) - (b.releaseType === 1 ? 0 : 1)
+    if (releaseDelta !== 0) return releaseDelta
+    return new Date(b.dateCreated || 0).getTime() - new Date(a.dateCreated || 0).getTime()
+  })
+
+  return candidates[0] || null
+}
+
+function pickCurseForgeAddonFile(files, options = {}) {
+  const gameVersion = String(options.gameVersion || '').trim()
+  const loader = String(options.loader || '').trim().toLowerCase()
+  let candidates = Array.isArray(files) ? files.filter((file) => file && file.id) : []
+
+  if (gameVersion) {
+    candidates = candidates.filter((file) => Array.isArray(file.gameVersions) && file.gameVersions.includes(gameVersion))
+  }
+  if (loader) {
+    candidates = candidates.filter((file) => Array.isArray(file.gameVersions) && file.gameVersions.some((item) => String(item).toLowerCase() === loader))
+  }
+
+  candidates.sort((a, b) => {
+    const releaseDelta = (a.releaseType === 1 ? 0 : 1) - (b.releaseType === 1 ? 0 : 1)
+    if (releaseDelta !== 0) return releaseDelta
+    return new Date(b.dateCreated || 0).getTime() - new Date(a.dateCreated || 0).getTime()
+  })
+
+  return candidates[0] || null
+}
+
+async function resolveCurseForgeManifestFile(item, context = {}) {
+  const projectId = normalizeCurseForgeId(item.projectId, 'projectID')
+  const fileId = normalizeCurseForgeId(item.fileId, 'fileID')
+
+  try {
+    const file = await getCurseForgeFile(projectId, fileId)
+    return { projectId, requestedFileId: fileId, fileId: file.id, file, replaced: false, manual: false }
+  } catch (error) {
+    const manualFallback = getManualCurseForgeFileFallback(projectId, fileId)
+    if (manualFallback) {
+      return {
+        projectId,
+        requestedFileId: fileId,
+        fileId: manualFallback.id,
+        file: manualFallback,
+        replaced: false,
+        manual: true,
+        warning: `Файл ${projectId}/${fileId} скачан по прямой CDN-ссылке`
+      }
+    }
+
+    const files = await getCurseForgeProjectFiles(projectId, {
+      pageSize: 50,
+      removeAlphas: false
+    })
+    const replacement = pickCurseForgeAddonFile(files, context)
+    if (replacement?.id) {
+      return {
+        projectId,
+        requestedFileId: fileId,
+        fileId: replacement.id,
+        file: replacement,
+        replaced: true,
+        manual: false,
+        warning: `Файл ${projectId}/${fileId} заменён на совместимый ${projectId}/${replacement.id}`
+      }
+    }
+
+    throw error
+  }
+}
+
+async function downloadResolvedCurseForgeFile(resolved, destination) {
+  if (resolved?.file?.downloadUrl) {
+    await downloadFile(resolved.file.downloadUrl, destination, {
+      headers: getCurseForgeRequestHeaders({ accept: 'application/octet-stream,*/*' })
+    })
+    return
+  }
+  await downloadCurseForgeFile(resolved.projectId, resolved.fileId, destination)
+}
+
+function parseCurseForgeManifestLoader(manifest) {
+  const modLoaders = Array.isArray(manifest?.minecraft?.modLoaders) ? manifest.minecraft.modLoaders : []
+  const selected = modLoaders.find((item) => item?.primary) || modLoaders[0] || null
+  const loaderId = typeof selected === 'string' ? selected : selected?.id || ''
+  const loader = normalizeModrinthLoader(loaderId) || 'vanilla'
+  let loaderVersion = ''
+
+  if (loader !== 'vanilla' && loaderId) {
+    const normalizedId = String(loaderId)
+    const prefix = `${loader}-`
+    if (normalizedId.toLowerCase().startsWith(prefix)) {
+      loaderVersion = normalizedId.slice(prefix.length)
+    } else {
+      const match = normalizedId.match(/(?:forge|fabric|quilt|neoforge)[-_ ](.+)$/i)
+      loaderVersion = match ? match[1] : ''
+    }
+  }
+
+  return { loader, loaderVersion, loaderId }
+}
+
+async function findModpackArchiveRoot(extractDir) {
+  const directManifest = path.join(extractDir, 'manifest.json')
+  if (fsSync.existsSync(directManifest)) return extractDir
+
+  try {
+    const entries = await fs.readdir(extractDir, { withFileTypes: true })
+    if (entries.length === 1 && entries[0].isDirectory()) {
+      const nested = path.join(extractDir, entries[0].name)
+      if (fsSync.existsSync(path.join(nested, 'manifest.json'))) return nested
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const nested = path.join(extractDir, entry.name)
+      if (fsSync.existsSync(path.join(nested, 'manifest.json'))) return nested
+    }
+  } catch {}
+
+  return extractDir
+}
+
+async function installCurseForgeModpack(projectId, options = {}, event = null) {
+  const curseProjectId = normalizeCurseForgeId(projectId, 'projectId')
+  const curseFileId = options.fileId ? normalizeCurseForgeId(options.fileId, 'fileId') : null
+
+  sendInstallProgress(event, 'Загрузка данных CurseForge...')
+  const file = curseFileId
+    ? await getCurseForgeFile(curseProjectId, curseFileId)
+    : pickCurseForgeModpackFile(await getCurseForgeProjectFiles(curseProjectId), options)
+
+  if (!file?.id) {
+    throw new Error('Не удалось найти файл модпака CurseForge')
+  }
+
+  const modpackKey = `curseforge-${curseProjectId}-${file.id}`
+  const modpackDir = path.join(modpacksPath, modpackKey)
+  const stagingDir = path.join(modpacksPath, `${modpackKey}.staging-${Date.now().toString(36)}`)
+  const archivePath = path.join(stagingDir, 'modpack.zip')
+  let stagingCreated = false
+
+  try {
+    await fs.mkdir(stagingDir, { recursive: true })
+    stagingCreated = true
+
+    sendInstallProgress(event, `Скачивание ${file.displayName || file.fileName || 'модпака'}...`)
+    await downloadCurseForgeFile(curseProjectId, file.id, archivePath)
+
+    sendInstallProgress(event, 'Распаковка CurseForge-модпака...')
+    const zip = new AdmZip(archivePath)
+    zip.extractAllTo(stagingDir, true)
+    try { await fs.unlink(archivePath) } catch {}
+
+    const root = await findModpackArchiveRoot(stagingDir)
+    const manifestPath = path.join(root, 'manifest.json')
+    if (!fsSync.existsSync(manifestPath)) {
+      throw new Error('В архиве CurseForge не найден manifest.json')
+    }
+
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'))
+    if (root !== stagingDir) {
+      await fs.copyFile(manifestPath, path.join(stagingDir, 'manifest.json'))
+      const modlistPath = path.join(root, 'modlist.html')
+      if (fsSync.existsSync(modlistPath)) {
+        await fs.copyFile(modlistPath, path.join(stagingDir, 'modlist.html'))
+      }
+    }
+
+    const { loader, loaderVersion, loaderId } = parseCurseForgeManifestLoader(manifest)
+    const gameVersion = String(manifest?.minecraft?.version || options.gameVersion || file.gameVersions?.find((item) => /^\d+\.\d+/.test(String(item))) || '1.20.1')
+    const projectTitle = String(options.title || manifest.name || file.displayName || `CurseForge ${curseProjectId}`).trim()
+    const installed = { mods: [], resourcepacks: [], shaderpacks: [] }
+    const dependencyWarnings = []
+
+    await fs.mkdir(path.join(stagingDir, 'mods'), { recursive: true })
+    await fs.mkdir(path.join(stagingDir, 'resourcepacks'), { recursive: true })
+    await fs.mkdir(path.join(stagingDir, 'shaderpacks'), { recursive: true })
+    await fs.mkdir(path.join(stagingDir, 'config'), { recursive: true })
+
+    const overridesPathName = normalizeArchiveRelativePath(manifest.overrides || 'overrides')
+    const overridesPath = overridesPathName ? path.join(root, overridesPathName.split('/').join(path.sep)) : null
+    if (overridesPath && fsSync.existsSync(overridesPath)) {
+      await copyDirectoryContents(overridesPath, stagingDir, { installed })
+    }
+
+    const manifestFiles = Array.isArray(manifest.files)
+      ? manifest.files
+          .filter((item) => item && item.required !== false)
+          .map((item) => ({
+            projectId: normalizeCurseForgeId(item.projectID || item.projectId, 'projectID'),
+            fileId: normalizeCurseForgeId(item.fileID || item.fileId, 'fileID')
+          }))
+      : []
+
+    const uniqueFiles = Array.from(new Map(manifestFiles.map((item) => [`${item.projectId}:${item.fileId}`, item])).values())
+    let downloadedCount = 0
+    sendInstallProgress(event, `Файлы модпака: 0/${uniqueFiles.length}`, { current: 0, total: Math.max(1, uniqueFiles.length) })
+
+    const downloadErrors = []
+    await runConcurrentTasks(uniqueFiles, async (item) => {
+      try {
+        const resolvedFile = await resolveCurseForgeManifestFile(item, { gameVersion, loader })
+        const addonFile = resolvedFile.file
+        const safeFileName = sanitizeManagedFileName(addonFile.fileName || `${item.projectId}-${item.fileId}.jar`)
+        const destination = path.join(stagingDir, 'mods', safeFileName)
+        await downloadResolvedCurseForgeFile(resolvedFile, destination)
+        installed.mods.push(safeFileName)
+        if (resolvedFile.warning) dependencyWarnings.push(resolvedFile.warning)
+      } catch (error) {
+        downloadErrors.push(`${item.projectId}/${item.fileId}: ${error && error.message ? error.message : error}`)
+      } finally {
+        downloadedCount += 1
+        if (downloadedCount % 5 === 0 || downloadedCount === uniqueFiles.length) {
+          sendInstallProgress(event, `Файлы модпака: ${downloadedCount}/${uniqueFiles.length}`, {
+            current: downloadedCount,
+            total: Math.max(1, uniqueFiles.length)
+          })
+        }
+      }
+    }, 4)
+
+    if (downloadErrors.length > 0) {
+      throw new Error(`Не удалось скачать файлы CurseForge (${downloadErrors.length}): ${downloadErrors.slice(0, 3).join('; ')}`)
+    }
+
+    installed.mods = [...new Set(installed.mods)]
+    installed.resourcepacks = [...new Set(installed.resourcepacks)]
+    installed.shaderpacks = [...new Set(installed.shaderpacks)]
+
+    if (fsSync.existsSync(modpackDir)) {
+      await fs.rm(modpackDir, { recursive: true, force: true })
+    }
+    await fs.rename(stagingDir, modpackDir)
+    stagingCreated = false
+
+    const profile = {
+      id: `modpack-curseforge-${curseProjectId}`,
+      name: projectTitle,
+      versionId: gameVersion,
+      ram: 'global',
+      javaPath: 'java',
+      username: '',
+      loader,
+      loaderVersion: loader === 'vanilla' ? '' : loaderVersion,
+      fullscreenMode: 'global',
+      modpackPath: modpackDir
+    }
+
+    const meta = {
+      projectId: `curseforge-${curseProjectId}`,
+      versionId: String(file.id),
+      curseForgeProjectId: curseProjectId,
+      curseForgeFileId: file.id,
+      projectTitle,
+      gameVersions: file.gameVersions || [],
+      gameVersion,
+      installed,
+      detectedLoader: loader,
+      loaderVersion: profile.loaderVersion || '',
+      loaderId,
+      source: 'curseforge',
+      sourceUrl: options.sourceUrl || '',
+      dependencyWarnings,
+      custom: false,
+      installedAt: Date.now()
+    }
+
+    await saveProfile(profile)
+    await saveJson(path.join(modpacksPath, `${modpackKey}.meta.json`), meta)
+    sendInstallProgress(event, `Модпак ${projectTitle} установлен`)
+    return { success: true, profile, file, modpackKey }
+  } catch (error) {
+    if (stagingCreated && fsSync.existsSync(stagingDir)) {
+      try { await fs.rm(stagingDir, { recursive: true, force: true }) } catch {}
+    }
+    throw error
+  }
 }
 
 async function installModrinthVersion(version, options = {}) {
@@ -4085,6 +4486,8 @@ async function launchGame(profile, event, launcherProfileNameOverride = '') {
     if (verboseLaunchLogging) console.log(`[Launch] Using main minecraft root for libraries: ${root}`)
     if (verboseLaunchLogging) console.log(`[Launch] Using modpack game directory: ${modpackGameDir}`)
     options.root = root  // Keep main minecraft for libraries/versions
+    // Keep runtime-relative mod paths, such as FancyMenu [source:local], inside the modpack.
+    options.overrides.cwd = modpackGameDir
     // Use overrides to set game directory - this sets --gameDir in launch args
     options.overrides.gameDirectory = modpackGameDir
   } else {
@@ -5044,6 +5447,10 @@ ipcMain.handle('launcher:installModrinthProject', async (event, projectId, optio
 ipcMain.handle('launcher:installModrinthVersion', async (event, versionId, options) => {
   const version = await getModrinthVersion(versionId)
   return await installModrinthVersion(version, options)
+})
+
+ipcMain.handle('launcher:installCurseForgeModpack', async (event, projectId, options) => {
+  return await installCurseForgeModpack(projectId, options || {}, event)
 })
 
 ipcMain.handle('launcher:getInstalledModrinthAddons', async () => {

@@ -27,11 +27,13 @@ contextBridge.exposeInMainWorld('launcher', {
   getModrinthVersion: (versionId, options) => ipcRenderer.invoke('launcher:getModrinthVersion', versionId, options),
   installModrinthProject: (projectId, options) => ipcRenderer.invoke('launcher:installModrinthProject', projectId, options),
   installModrinthVersion: (versionId, options) => ipcRenderer.invoke('launcher:installModrinthVersion', versionId, options),
+  installCurseForgeModpack: (projectId, options) => ipcRenderer.invoke('launcher:installCurseForgeModpack', projectId, options),
   getInstalledModrinthAddons: () => ipcRenderer.invoke('launcher:getInstalledModrinthAddons'),
   toggleInstalledAddon: (type, name, enabled, addonPath) => ipcRenderer.invoke('launcher:toggleInstalledAddon', type, name, enabled, addonPath),
   deleteInstalledAddon: (type, name, addonPath) => ipcRenderer.invoke('launcher:deleteInstalledAddon', type, name, addonPath),
   deleteModpackDirectory: (modpackKey) => ipcRenderer.invoke('launcher:deleteModpackDirectory', modpackKey),
   openExternal: (targetUrl) => ipcRenderer.invoke('launcher:openExternal', targetUrl),
+  openGameFolder: () => ipcRenderer.invoke('launcher:openGameFolder'),
   // Skin management
   saveSkin: (profileId, base64Data, options) => ipcRenderer.invoke('launcher:saveSkin', profileId, base64Data, options),
   getSkinUrl: (profileId) => ipcRenderer.invoke('launcher:getSkinUrl', profileId)
